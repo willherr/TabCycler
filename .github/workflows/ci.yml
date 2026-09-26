@@ -30,11 +30,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $exe)) { throw "build produced no exe" }
           Write-Host "ok: $exe ($([math]::Round((Get-Item $exe).Length/1KB,1)) KB)"
 
-      - name: Upload the built executable
-        uses: actions/upload-artifact@v4
-        with:
-          name: TabCycler
-          path: src/TabCycler/TabCycler.exe
-          # Short-lived scratch output for a release build; do not leave these
-          # sitting against the account's storage quota.
-          retention-days: 3
+      # No upload-artifact step on purpose. The build is verified by the step
+      # above, and a release should attach its own binary deliberately rather
+      # than inherit whatever CI happened to produce. It also keeps this
+      # workflow off the account's Actions artifact storage quota, which is
+      # shared across all private repos and has been known to fill up from
+      # artifacts on other repos long after their workflows were removed.
