@@ -39,12 +39,17 @@ pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```
 
-27 tests, no external test package, and no desktop required. The state machine
+33 tests, no external test package, and no desktop required. The state machine
 is a plain class that takes the current time as a parameter and reports what
 should happen rather than doing it, so the tests drive it with a fake platform
 and a synthetic clock. That is deliberate: the logic originally lived inside a
 `Form` subclass, which meant the only way to check it was to poke a live window,
 and four separate bugs got through that way.
+
+`PlatformTests` calls the real Win32 layer, read-only. Those exist because a
+wrong `DllImport` compiles perfectly happily and then throws
+`EntryPointNotFoundException` on the first call, so a green build says nothing
+about whether the entry points exist.
 
 ## How it works
 

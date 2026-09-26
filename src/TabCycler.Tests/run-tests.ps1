@@ -20,14 +20,18 @@ $exe = Join-Path $PSScriptRoot 'TabCycler.Tests.exe'
 if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
 
 # The engine and its interface are compiled straight into the test binary, so
-# the tests exercise the shipping source rather than a copy of it.
+# the tests exercise the shipping source rather than a copy of it. Win32Platform
+# comes too, because PlatformTests calls it for real: a wrong DllImport compiles
+# cleanly and only fails at call time.
 $sources = @(
     (Join-Path $PSScriptRoot '..\TabCycler\WatchState.cs')
     (Join-Path $PSScriptRoot '..\TabCycler\IPlatform.cs')
     (Join-Path $PSScriptRoot '..\TabCycler\CyclerEngine.cs')
+    (Join-Path $PSScriptRoot '..\TabCycler\Win32Platform.cs')
     (Join-Path $PSScriptRoot 'TestHarness.cs')
     (Join-Path $PSScriptRoot 'FakePlatform.cs')
     (Join-Path $PSScriptRoot 'EngineTests.cs')
+    (Join-Path $PSScriptRoot 'PlatformTests.cs')
     (Join-Path $PSScriptRoot 'TestProgram.cs')
 )
 

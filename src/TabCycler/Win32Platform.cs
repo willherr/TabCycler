@@ -11,7 +11,11 @@ namespace TabCycler
     /// </summary>
     public sealed class Win32Platform : IPlatform
     {
-        [DllImport("user32.dll")]
+        // The managed name differs from the export so it does not collide with
+        // the IPlatform method of the same name. EntryPoint must therefore be
+        // stated explicitly, or the runtime looks for an export that does not
+        // exist and throws EntryPointNotFound on the first call.
+        [DllImport("user32.dll", EntryPoint = "GetForegroundWindow")]
         static extern IntPtr NativeGetForegroundWindow();
 
         [DllImport("user32.dll")]

@@ -12,7 +12,7 @@ watch multiple agents work without clicking.
 # Build the exe
 pwsh -NoProfile -File .\src\TabCycler\build.ps1
 
-# Run the tests (27 of them, no desktop needed)
+# Run the tests (33 of them, no desktop needed)
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```
@@ -21,6 +21,35 @@ Both use the .NET Framework compiler that ships with Windows
 (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`). There is no .NET SDK
 on this machine and no package restore; do not introduce a dependency that needs
 one without checking that first.
+
+## A green build does not mean the P/Invoke works
+
+If you rename a `DllImport` method you **must** set `EntryPoint` to the real
+export name. The managed name is otherwise used as the export name, the code
+compiles cleanly, CI is green, every logic test passes, and the app throws
+`EntryPointNotFoundException` the first time it runs. That happened here, and it
+crashed the widget 250ms after launch.
+
+`PlatformTests` exists for exactly this: it calls the real read-only Win32
+methods so the failure shows up in the suite. If you add an extern, add a
+corresponding call in `PlatformTests`. Never call `InjectNextTab` from a test,
+it would send real keystrokes.
+
+## Verifying the widget is actually alive
+
+Do not treat "the process exists" as success, and do not treat a log line as
+proof. The crash above happened *after* the `started:` line was written, and the
+process stayed alive holding the .NET crash dialog, so both checks passed while
+the app was dead.
+
+What actually proves it:
+
+- Process alive and `Responding` well past the first tick (250ms)
+- A focus transition in the log, e.g. `terminal focused -> holding 60s` or
+  `left Windows Terminal -> Idle`. Either one can only be written if
+  `GetForegroundWindow` and `IsTerminalWindow` both resolved and returned live
+  values, which is the path that was crashing
+- A screenshot, since layout regressions are invisible to every other check
 
 ## Architecture, and the rule that matters
 
