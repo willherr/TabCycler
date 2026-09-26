@@ -1,8 +1,10 @@
-# Generates TabCycler.ico (a "cycle" glyph) for the taskbar/Explorer, then
-# compiles TabCycler.cs to a standalone exe via the .NET Framework csc.exe that
-# ships with Windows, so the build needs no SDK or runtime install.
+# Builds TabCycler.exe.
 #
-# pwsh -NoProfile -File .\build.ps1
+#   pwsh -NoProfile -File .\build.ps1
+#
+# Compiles with the .NET Framework compiler that ships with Windows, so the
+# build needs no SDK, no runtime install and no package restore. Also generates
+# the application icon.
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -29,9 +31,7 @@ function New-TabCyclerIcon {
         $g.FillEllipse($brush, [single]$pad, [single]$pad, [single]$diam, [single]$diam)
         $brush.Dispose()
 
-        # Open circular arrow, 280 degrees, with a triangular head, drawn inside
-        # the disc at a radius that leaves the arrow visually centred.
-        $s   = $Size / 32.0
+        # Open circular arrow: a 255 degree arc with a triangular head.
         $cx  = $Size / 2.0
         $cy  = $Size / 2.0
         $r   = $diam * 0.30
@@ -42,19 +42,15 @@ function New-TabCyclerIcon {
                     [System.Drawing.Color]::White,
                     [single][Math]::Max(2.0, $Size * 0.115))
         $pen.StartCap = $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Flat
-        # GDI measures sweep angles clockwise from 3 o'clock.
         $g.DrawArc($pen, $box, 205, 255)
         $pen.Dispose()
 
-        # Arrow head at the arc's end angle, pointing tangentially.
-        $sweep = 255.0
-        $endDeg = 205 + $sweep
+        $endDeg = 205 + 255.0
         $rad = $endDeg * [Math]::PI / 180.0
         $hx  = $cx + ($r * [Math]::Cos($rad))
         $hy  = $cy + ($r * [Math]::Sin($rad))
         $len = $diam * 0.30
         $wid = $diam * 0.20
-        # Tangent direction (clockwise), then two base corners either side.
         $tx = [Math]::Sin($rad)
         $ty = -[Math]::Cos($rad)
         $nx = [Math]::Cos($rad)
@@ -73,11 +69,9 @@ function New-TabCyclerIcon {
         $g.FillPolygon($wb, $pts)
         $wb.Dispose()
     }
-    finally {
-        $g.Dispose()
-    }
+    finally { $g.Dispose() }
 
-    # Single 256px PNG-in-ICO entry: Windows scales it down for the taskbar.
+    # Single 256px PNG-in-ICO entry; Windows scales it down for the taskbar.
     $ms = New-Object System.IO.MemoryStream
     try {
         $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -88,20 +82,17 @@ function New-TabCyclerIcon {
     $fs = [System.IO.File]::Create($Path)
     try {
         $bw = New-Object System.IO.BinaryWriter($fs)
-        # ICONDIR
-        $bw.Write([UInt16]0)              # reserved
-        $bw.Write([UInt16]1)              # type: icon
-        $bw.Write([UInt16]1)              # image count
-        # ICONDIRENTRY
-        $bw.Write([Byte]($Size -band 0xFF))  # width  (0 means 256)
-        $bw.Write([Byte]($Size -band 0xFF))  # height
-        $bw.Write([Byte]0)                  # palette
-        $bw.Write([Byte]0)                  # reserved
-        $bw.Write([UInt16]1)                # color planes
-        $bw.Write([UInt16]32)               # bits per pixel
-        $bw.Write([UInt32]$png.Length)      # bytes in resource
-        $bw.Write([UInt32]22)               # offset of image data
-        # PNG payload
+        $bw.Write([UInt16]0)
+        $bw.Write([UInt16]1)
+        $bw.Write([UInt16]1)
+        $bw.Write([Byte]($Size -band 0xFF))
+        $bw.Write([Byte]($Size -band 0xFF))
+        $bw.Write([Byte]0)
+        $bw.Write([Byte]0)
+        $bw.Write([UInt16]1)
+        $bw.Write([UInt16]32)
+        $bw.Write([UInt32]$png.Length)
+        $bw.Write([UInt32]22)
         $bw.Write($png)
     }
     finally { $fs.Dispose() }
@@ -113,14 +104,16 @@ Write-Host "icon: $ico"
 
 # ---- compile ---------------------------------------------------------------
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path -LiteralPath $csc)) {
-    throw "csc.exe not found at $csc"
-}
+if (-not (Test-Path -LiteralPath $csc)) { throw "csc.exe not found at $csc" }
 
 $exe = Join-Path $PSScriptRoot 'TabCycler.exe'
 if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
 
-$args = @(
+$sources = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File |
+             ForEach-Object { $_.FullName })
+if ($sources.Count -eq 0) { throw "no .cs sources found in $PSScriptRoot" }
+
+$compilerArgs = @(
     '/nologo'
     '/target:winexe'            # no console window on launch
     '/platform:anycpu'
@@ -130,12 +123,12 @@ $args = @(
     '/win32icon:' + $ico
     '/win32manifest:' + (Join-Path $PSScriptRoot 'app.manifest')
     '/reference:System.dll'
+    '/reference:System.Core.dll'
     '/reference:System.Drawing.dll'
     '/reference:System.Windows.Forms.dll'
-    (Join-Path $PSScriptRoot 'TabCycler.cs')
-)
+) + $sources
 
-& $csc @args
+& $csc @compilerArgs
 if ($LASTEXITCODE -ne 0) { throw "compile failed (exit $LASTEXITCODE)" }
 if (-not (Test-Path -LiteralPath $exe)) { throw "compile produced no exe" }
 

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both steps use the .NET Framework compiler that ships with Windows, so
+      # there is no SDK to install and no package restore. The tests compile the
+      # shipping engine source directly rather than a copy of it.
+      - name: Run tests
+        shell: pwsh
+        run: ./src/TabCycler.Tests/run-tests.ps1
+
+      - name: Build
+        shell: pwsh
+        run: ./src/TabCycler/build.ps1
+
+      - name: Confirm the executable was produced
+        shell: pwsh
+        run: |
+          $exe = './src/TabCycler/TabCycler.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "build produced no exe" }
+          Write-Host "ok: $exe ($([math]::Round((Get-Item $exe).Length/1KB,1)) KB)"
+
+      - name: Upload the built executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: TabCycler
+          path: src/TabCycler/TabCycler.exe
+          # Short-lived scratch output for a release build; do not leave these
+          # sitting against the account's storage quota.
+          retention-days: 3
