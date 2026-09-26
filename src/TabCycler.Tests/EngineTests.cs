@@ -201,25 +201,123 @@ namespace TabCycler.Tests
             }
         }
 
-        [Test("pointer movement alone is not treated as input")]
-        public void PointerMovementIsNotInput()
+        [Test("a deliberate pointer movement stops the cycling")]
+        public void DeliberatePointerMovementStopsCycling()
         {
             Setup();
             DateTime c = ReachCycling();
             Poll(c, 1);
             Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
 
-            // A drifting hand, over a period longer than the hold.
+            // A real hand movement, well past the threshold.
+            _p.MovePointer(60, 40);
+            _e.Tick(c.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State,
+                "moving the mouse a real distance is deliberate input");
+            Assert.Equal("Holding for 60s", _e.StatusText, "and restarts the full hold");
+        }
+
+        [Test("movement on either axis alone is enough")]
+        public void MovementOnOneAxisCounts()
+        {
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            _p.MovePointer(50, 0);
+            _e.Tick(c.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State, "horizontal movement alone should count");
+
+            _e.Toggle(c.AddSeconds(2));
+            Poll(c.AddSeconds(2), 1);
+            _p.MovePointer(0, 50);
+            _e.Tick(c.AddSeconds(3));
+            Assert.Same(WatchState.Holding, _e.State, "vertical movement alone should count too");
+        }
+
+        [Test("jitter below the threshold is ignored, so the countdown still runs")]
+        public void SmallJitterIsIgnored()
+        {
+            // The guard against the original problem, where any movement re-armed
+            // the hold every poll and the widget sat at 60 forever.
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            // Sub-threshold twitch every 250ms for well over a minute.
             DateTime t = c;
-            for (int i = 0; i < 40; i++)
+            for (int i = 0; i < 300; i++)
             {
-                _p.DriftPointer();
+                _p.DriftPointer();      // +2,+1
                 _e.Tick(t);
-                t = t.AddSeconds(5);
+                t = t.AddMilliseconds(250);
             }
             Assert.Same(WatchState.Cycling, _e.State,
-                "drifting the mouse must not stop the cycling");
-            Assert.True(_p.Injections > 1, "and it should have carried on switching");
+                "a hand resting on the mouse must not hold the widget off forever");
+        }
+
+        [Test("the jitter threshold is configurable")]
+        public void ThresholdIsConfigurable()
+        {
+            _p = new FakePlatform();
+            _e = new CyclerEngine(_p, Interval, Hold, T0, 50);
+            Assert.Equal(50, _e.MoveThresholdPixels, "the threshold is the one supplied");
+
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));            // cycling
+            _p.MovePointer(30, 0);                // below the raised threshold
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Same(WatchState.Cycling, _e.State,
+                "with a high threshold, 30px no longer counts as deliberate");
+
+            _p.MovePointer(60, 0);                // above it
+            _e.Tick(T0.AddSeconds(7));
+            Assert.Same(WatchState.Holding, _e.State, "60px does");
+        }
+
+        [Test("rejects a movement threshold below one pixel")]
+        public void RejectsBadThreshold()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new CyclerEngine(new FakePlatform(), Interval, Hold, T0, 0),
+                "a zero threshold would make every pixel count and reintroduce the stuck countdown");
+        }
+
+        [Test("scrolling stops the cycling")]
+        public void ScrollStopsCycling()
+        {
+            // A wheel event changes the input stamp but leaves the pointer
+            // exactly where it was, which is how it is told apart from nothing.
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            _p.ScrollWheel();
+            _e.Tick(c.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State, "a wheel event is deliberate input");
+            Assert.Equal("Holding for 60s", _e.StatusText, "and restarts the full hold");
+        }
+
+        [Test("scrolling keeps the hold from expiring while it continues")]
+        public void ContinuousScrollingKeepsHolding()
+        {
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            _p.ScrollWheel();
+            _e.Tick(c.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State, "precondition: held by the scroll");
+
+            DateTime t = c.AddSeconds(1);
+            for (int i = 0; i < 20; i++)
+            {
+                _p.ScrollWheel();
+                _e.Tick(t);
+                t = t.AddSeconds(5);
+                Assert.Same(WatchState.Holding, _e.State,
+                    "scrolling for longer than the hold should keep it held at step " + i);
+            }
         }
 
         [Test("a click that does not move the pointer is input")]
@@ -447,6 +545,15 @@ namespace TabCycler.Tests
             Assert.Equal("next tab in 5s", _e.DetailText, "shows the full interval first");
             _e.Tick(T0.AddSeconds(3));
             Assert.Equal("next tab in 2s", _e.DetailText, "counts down to the switch");
+        }
+
+        [Test("the holding hint mentions every kind of input")]
+        public void HoldingHintCoversAllInputs()
+        {
+            Setup();
+            _e.Tick(T0);
+            Assert.Equal("reset by typing, clicks, scroll or movement", _e.DetailText,
+                "the hint should tell the user everything that re-arms the hold");
         }
 
         [Test("Idle tells the user what to do")]

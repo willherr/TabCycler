@@ -57,8 +57,26 @@ namespace TabCycler.Tests
         /// <summary>Simulate a click, pointer unmoved.</summary>
         public void Click() { Stamp = Stamp + 1; }
 
-        /// <summary>Simulate the pointer drifting without pressing anything.</summary>
-        public void DriftPointer() { CursorX = CursorX + 2; CursorY = CursorY + 1; }
+        /// <summary>
+        /// A twitch of the pointer, as a resting hand produces. Moves the
+        /// cursor by a couple of pixels and bumps the input stamp, which is
+        /// what real movement does.
+        /// </summary>
+        public void DriftPointer() { MovePointer(2, 1); }
+
+        /// <summary>Move the pointer an explicit amount, in either direction.</summary>
+        public void MovePointer(int dx, int dy)
+        {
+            CursorX = CursorX + dx;
+            CursorY = CursorY + dy;
+            Stamp = Stamp + 1;
+        }
+
+        /// <summary>
+        /// A wheel event. It changes the input stamp but does not move the
+        /// pointer, which is exactly why it is already detected.
+        /// </summary>
+        public void ScrollWheel() { Stamp = Stamp + 1; }
 
         /// <summary>Click the widget, which also moves the pointer onto it.</summary>
         public void ClickWidget(IntPtr widgetHandle)

@@ -25,14 +25,12 @@ namespace TabCycler
         static readonly Color StartFace = Color.FromArgb(0x4A, 0x4A, 0x4A);
         static readonly Color Danger = Color.FromArgb(0xC4, 0x2B, 0x1C);
 
-        // Widget geometry is authored at 96 DPI and multiplied by the display
-        // scale. The app is per-monitor DPI aware, so point-sized fonts grow on
-        // their own but pixel control bounds would not, which squashes the text.
+        // Geometry is authored at 96 DPI and multiplied out at runtime. See
+        // ApplyDpi for why that is not simply done once in the constructor.
         const int W = 320, H = 82;
 
         readonly Settings _cfg;
         readonly CyclerEngine _engine;
-        readonly float _scale;
         readonly Timer _tick = new Timer();
         readonly Label _title = new Label();
         readonly Label _status = new Label();
@@ -40,29 +38,17 @@ namespace TabCycler
         readonly Button _toggle = new Button();
         readonly Button _close = new Button();
 
-        int Px(int v) { return (int)Math.Round(v * _scale, MidpointRounding.AwayFromZero); }
+        float _scale = 1f;
+        bool _positioned;
 
-        static string LogPath
-        {
-            get
-            {
-                return Path.Combine(Settings.Dir, "tabcycler.log");
-            }
-        }
+        static string LogPath { get { return Path.Combine(Settings.Dir, "tabcycler.log"); } }
 
         public CyclerForm(IPlatform platform)
         {
             _cfg = new Settings();
 
-            float dpi = 96f;
-            using (Graphics screen = Graphics.FromHwnd(IntPtr.Zero))
-            {
-                if (screen != null && screen.DpiX > 0) dpi = screen.DpiX;
-            }
-            _scale = dpi / 96f;
-
             _engine = new CyclerEngine(platform, _cfg.IntervalSeconds, _cfg.ResumeDelaySeconds,
-                                       DateTime.Now)
+                                       DateTime.Now, _cfg.MoveThresholdPixels)
             {
                 Log = Log
             };
@@ -71,39 +57,32 @@ namespace TabCycler
             Text = "Tab Cycler";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
-            ClientSize = new Size(Px(W), Px(H));
             BackColor = Back;
             ForeColor = Body;
             TopMost = true;                 // stay above the terminal and everything else
             ShowInTaskbar = true;           // own taskbar button, pinnable
             MinimizeBox = false;
             MaximizeBox = false;
-            AutoScaleMode = AutoScaleMode.None;   // scaling is done explicitly by Px()
+            // Deliberately None. WinForms' own DPI autoscaling reads the DPI via
+            // CreateGraphics(), which reports 96 on a 150% display, so it
+            // silently declines to scale. ApplyDpi does it properly instead.
+            AutoScaleMode = AutoScaleMode.None;
 
             _title.Text = "Tab Cycler";
             _title.ForeColor = Title;
-            _title.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
             _title.BackColor = Color.Transparent;
-            _title.Location = new Point(Px(10), Px(8));
-            _title.Size = new Size(Px(185), Px(18));
             _title.TextAlign = ContentAlignment.MiddleLeft;
 
-            _status.Font = new Font("Segoe UI", 8.5f);
             _status.ForeColor = Body;
             _status.BackColor = Color.Transparent;
-            _status.Location = new Point(Px(10), Px(34));
-            _status.Size = new Size(Px(300), Px(17));
             _status.TextAlign = ContentAlignment.MiddleLeft;
 
-            _detail.Font = new Font("Segoe UI", 8.5f);
             _detail.ForeColor = Color.FromArgb(0x7A, 0x7A, 0x7A);
             _detail.BackColor = Color.Transparent;
-            _detail.Location = new Point(Px(10), Px(56));
-            _detail.Size = new Size(Px(300), Px(17));
             _detail.TextAlign = ContentAlignment.MiddleLeft;
 
-            ConfigureButton(_toggle, new Point(Px(202), Px(5)), new Size(Px(72), Px(26)));
-            ConfigureButton(_close, new Point(Px(280), Px(5)), new Size(Px(30), Px(26)));
+            ConfigureButton(_toggle);
+            ConfigureButton(_close);
             _close.Text = "X";
             _close.ForeColor = Color.FromArgb(0xC9, 0xC9, 0xC9);
             _close.MouseEnter += delegate { _close.BackColor = Danger; _close.ForeColor = Color.White; };
@@ -122,8 +101,6 @@ namespace TabCycler
             foreach (Control c in new Control[] { _title, _status, _detail })
                 c.MouseDown += OnDragStart;
 
-            RestorePosition();
-
             // Persist the position shortly after a drag settles, not just on
             // exit, so closing the widget some other way does not lose it.
             DateTime lastSave = DateTime.MinValue;
@@ -137,9 +114,6 @@ namespace TabCycler
                 SavePosition();
             };
 
-            Log("started: interval=" + _cfg.IntervalSeconds + "s resumeDelay=" +
-                _cfg.ResumeDelaySeconds + "s at " + Left + "," + Top);
-
             _tick.Interval = 250;
             _tick.Tick += delegate { OnPoll(); };
             _tick.Start();
@@ -147,17 +121,56 @@ namespace TabCycler
             FormClosing += delegate { SavePosition(); _tick.Stop(); };
         }
 
-        void ConfigureButton(Button b, Point loc, Size size)
+        void ConfigureButton(Button b)
         {
             b.FlatStyle = FlatStyle.Flat;
             b.FlatAppearance.BorderSize = 0;
             b.FlatAppearance.MouseOverBackColor = BtnHover;
             b.BackColor = BtnFace;
             b.ForeColor = Color.FromArgb(0xDE, 0xDE, 0xDE);
-            b.Font = new Font("Segoe UI", 8.5f);
-            b.Location = loc;
-            b.Size = size;
             b.UseVisualStyleBackColor = false;
+        }
+
+        int P(int v) { return (int)Math.Round(v * _scale, MidpointRounding.AwayFromZero); }
+
+        /// <summary>
+        /// Lays the widget out for the DPI of the monitor it is actually on.
+        ///
+        /// This has to run after the window handle exists, because the only
+        /// trustworthy DPI source is GetDpiForWindow. Reading it in the
+        /// constructor produced 96 on a 150% display, and so did
+        /// AutoScaleMode.Dpi, which uses CreateGraphics() internally. The
+        /// symptom was a 320x82 box holding 150%-scaled fonts, so the buttons
+        /// jammed against the edge and the hint text was clipped.
+        /// </summary>
+        void ApplyDpi()
+        {
+            uint dpi = Native.GetDpiForWindow(Handle);
+            _scale = (dpi > 0 ? dpi : 96u) / 96f;
+
+            ClientSize = new Size(P(W), P(H));
+
+            _title.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _title.Location = new Point(P(10), P(8));
+            _title.Size = new Size(P(185), P(18));
+
+            _status.Font = new Font("Segoe UI", 8.5f);
+            _status.Location = new Point(P(10), P(34));
+            _status.Size = new Size(P(300), P(17));
+
+            _detail.Font = new Font("Segoe UI", 8.5f);
+            _detail.Location = new Point(P(10), P(56));
+            _detail.Size = new Size(P(300), P(17));
+
+            _toggle.Font = new Font("Segoe UI", 8.5f);
+            _toggle.Location = new Point(P(202), P(5));
+            _toggle.Size = new Size(P(72), P(26));
+
+            _close.Font = new Font("Segoe UI", 8.5f);
+            _close.Location = new Point(P(280), P(5));
+            _close.Size = new Size(P(30), P(26));
+
+            Invalidate();
         }
 
         void OnPoll()
@@ -207,8 +220,12 @@ namespace TabCycler
 
         void RestorePosition()
         {
+            // Deliberately the primary screen, not Screen.FromControl(this).
+            // Before the window is positioned, FromControl resolves to whichever
+            // monitor Windows happened to create it on, which put the widget on
+            // the second display and made it look like it had vanished.
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            int fw = Px(W), fh = Px(H);
+            int fw = P(W), fh = P(H);
             if (_cfg.SeenLeft && _cfg.SeenTop)
             {
                 // Only trust a saved position that still lands on some display,
@@ -224,8 +241,8 @@ namespace TabCycler
                 }
             }
             // Default: top-right of the primary screen, clear of the tab bar.
-            Left = wa.Right - fw - Px(16);
-            Top = wa.Top + Px(48);
+            Left = wa.Right - fw - P(16);
+            Top = wa.Top + P(48);
         }
 
         void SavePosition()
@@ -292,13 +309,38 @@ namespace TabCycler
         {
             base.OnHandleCreated(e);
             _engine.WidgetHandle = Handle;
+
+            ApplyDpi();
+
+            // Only place the window once, after its real size is known.
+            if (!_positioned)
+            {
+                _positioned = true;
+                RestorePosition();
+            }
+
+            Log("started: interval=" + _cfg.IntervalSeconds + "s resumeDelay=" +
+                _cfg.ResumeDelaySeconds + "s moveThreshold=" + _cfg.MoveThresholdPixels +
+                "px dpi=" + (int)(_scale * 96) + " size=" + P(W) + "x" + P(H) +
+                " at " + Left + "," + Top);
+        }
+
+        /// <summary>
+        /// Re-lay out when the window lands on a monitor with a different scale.
+        /// Without this the widget keeps the box size of whichever monitor it
+        /// started on, which squashes the text on the other one.
+        /// </summary>
+        protected override void OnDpiChangedAfterParent(EventArgs e)
+        {
+            base.OnDpiChangedAfterParent(e);
+            ApplyDpi();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             using (Pen p = new Pen(Edge))
-                e.Graphics.DrawRectangle(p, 0, 0, Px(W) - 1, Px(H) - 1);
+                e.Graphics.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
         }
     }
 
@@ -306,6 +348,9 @@ namespace TabCycler
     {
         internal const int WM_NCLBUTTONDOWN = 0x00A1;
         internal const int HTCAPTION = 0x0002;
+
+        [DllImport("user32.dll")]
+        internal static extern uint GetDpiForWindow(IntPtr hwnd);
 
         [DllImport("user32.dll")]
         internal static extern bool ReleaseCapture();

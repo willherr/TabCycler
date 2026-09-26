@@ -13,6 +13,7 @@ namespace TabCycler
     {
         public int IntervalSeconds = 5;
         public int ResumeDelaySeconds = 60;
+        public int MoveThresholdPixels = CyclerEngine.DefaultMoveThresholdPixels;
         public int Left, Top;
         public bool SeenLeft, SeenTop;
 
@@ -53,6 +54,9 @@ namespace TabCycler
                         case "resumedelayseconds":
                             if (int.TryParse(v, out n) && n >= 0) ResumeDelaySeconds = n;
                             break;
+                        case "movethresholdpixels":
+                            if (int.TryParse(v, out n) && n >= 1) MoveThresholdPixels = n;
+                            break;
                         case "left":
                             if (int.TryParse(v, out n)) { Left = n; SeenLeft = true; }
                             break;
@@ -77,6 +81,7 @@ namespace TabCycler
                     "# TabCycler settings" + Environment.NewLine +
                     "IntervalSeconds=" + IntervalSeconds + Environment.NewLine +
                     "ResumeDelaySeconds=" + ResumeDelaySeconds + Environment.NewLine +
+                    "MoveThresholdPixels=" + MoveThresholdPixels + Environment.NewLine +
                     "Left=" + Left + Environment.NewLine +
                     "Top=" + Top + Environment.NewLine);
             }

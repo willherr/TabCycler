@@ -11,9 +11,16 @@ namespace TabCycler
     /// </summary>
     public sealed class CyclerEngine
     {
+        /// <summary>
+        /// How far the pointer has to travel in one poll before the movement
+        /// counts as deliberate. Below this it is treated as jitter.
+        /// </summary>
+        public const int DefaultMoveThresholdPixels = 8;
+
         readonly IPlatform _p;
         readonly int _interval;
         readonly int _hold;
+        readonly int _moveThreshold;
 
         WatchState _state = WatchState.Holding;
         DateTime _now;
@@ -23,17 +30,19 @@ namespace TabCycler
         uint _lastStamp;
         bool _haveStamp;
         CursorPos _lastCursor;
-        bool _haveCursor;
 
-        public CyclerEngine(IPlatform platform, int intervalSeconds, int holdSeconds, DateTime start)
+        public CyclerEngine(IPlatform platform, int intervalSeconds, int holdSeconds,
+                            DateTime start, int moveThresholdPixels = DefaultMoveThresholdPixels)
         {
             if (platform == null) throw new ArgumentNullException("platform");
             if (intervalSeconds < 1) throw new ArgumentOutOfRangeException("intervalSeconds");
             if (holdSeconds < 0) throw new ArgumentOutOfRangeException("holdSeconds");
+            if (moveThresholdPixels < 1) throw new ArgumentOutOfRangeException("moveThresholdPixels");
 
             _p = platform;
             _interval = intervalSeconds;
             _hold = holdSeconds;
+            _moveThreshold = moveThresholdPixels;
             _now = start;
             _state = WatchState.Holding;
             _resumeAt = start.AddSeconds(_hold);
@@ -45,6 +54,7 @@ namespace TabCycler
 
         public int IntervalSeconds { get { return _interval; } }
         public int HoldSeconds { get { return _hold; } }
+        public int MoveThresholdPixels { get { return _moveThreshold; } }
         public WatchState State { get { return _state; } }
 
         /// <summary>
@@ -88,7 +98,7 @@ namespace TabCycler
                 switch (_state)
                 {
                     case WatchState.Away: return "focus Windows Terminal to start";
-                    case WatchState.Holding: return "reset by your typing or clicks";
+                    case WatchState.Holding: return "reset by typing, clicks, scroll or movement";
                     default: return "next tab in " + SecondsLeft(_nextCycleAt) + "s";
                 }
             }
@@ -217,14 +227,17 @@ namespace TabCycler
         }
 
         /// <summary>
-        /// True when the user did something deliberate since the last poll.
+        /// True when the user did something deliberate since the last poll:
+        /// a key press, a click, a wheel event, or a real movement of the
+        /// pointer.
         ///
-        /// GetLastInputInfo cannot tell input kinds apart and does record
-        /// pointer movement, so drifting the mouse re-armed the hold on every
-        /// poll and the countdown never got past its starting value. A key
-        /// press, click or scroll leaves the pointer where it was, so "the
-        /// stamp changed but the cursor did not move" is what separates a real
-        /// action from drift.
+        /// Wheel events and clicks leave the pointer exactly where it was, so
+        /// "the stamp changed but the cursor did not move" catches those. A
+        /// pointer that did move is also deliberate, but only once it has
+        /// travelled further than the threshold in a single poll. Without that
+        /// floor, sensor jitter and a resting hand re-armed the hold on every
+        /// poll and the countdown never got past its starting value, which is
+        /// what made the widget look stuck at 60.
         /// </summary>
         bool ConsumeUserInput(DateTime now)
         {
@@ -232,9 +245,9 @@ namespace TabCycler
             bool isNew = !_haveStamp || stamp != _lastStamp;
 
             CursorPos cursor = _p.CursorPosition();
-            bool cursorMoved = _haveCursor && !cursor.SameAs(_lastCursor);
+            int dx = Math.Abs(cursor.X - _lastCursor.X);
+            int dy = Math.Abs(cursor.Y - _lastCursor.Y);
             _lastCursor = cursor;
-            _haveCursor = true;
 
             if (isNew)
             {
@@ -243,7 +256,10 @@ namespace TabCycler
             }
 
             if (!isNew) return false;
-            if (cursorMoved) return false;
+
+            bool pointerHeldStill = (dx == 0 && dy == 0);
+            bool movedDeliberately = (dx >= _moveThreshold || dy >= _moveThreshold);
+            if (!pointerHeldStill && !movedDeliberately) return false;
 
             _resumeAt = now.AddSeconds(_hold);
             Write("input -> holding " + _hold + "s");
@@ -255,7 +271,6 @@ namespace TabCycler
             _lastStamp = _p.LastInputStamp();
             _haveStamp = true;
             _lastCursor = _p.CursorPosition();
-            _haveCursor = true;
         }
 
         void Write(string message)

@@ -51,6 +51,31 @@ What actually proves it:
   values, which is the path that was crashing
 - A screenshot, since layout regressions are invisible to every other check
 
+## Do not trust screen coordinates from this shell
+
+This shell runs `SYSTEM_DPI_AWARE`, and the widget is `PER_MONITOR_DPI_AWARE`.
+`GetWindowRect` on the widget therefore returns coordinates in a different space
+from the one `CopyFromScreen` captures, so cropping a region by those
+coordinates lands somewhere else entirely. This cost a lot of confusion: crops
+"showed" the widget as clipped when it was simply not there, and the widget was
+on the second display.
+
+- Take a full-screen shot and look, rather than cropping blind
+- `PrimaryScreen` only covers the primary monitor. There is a second display at
+  X=-1, Y=1080 (1280x720). A full-primary screenshot will not show the widget if
+  it is on the other one
+- `GetDpiForWindow` returns 96 when called from a thread that is not per-monitor
+  aware, so do not measure the widget's DPI from this shell. The widget reads
+  its own and logs it
+
+## DPI scaling is applied from the handle, not the constructor
+
+`ApplyDpi()` runs in `OnHandleCreated` and uses `GetDpiForWindow`. Do not move
+that back into the constructor and do not re-enable `AutoScaleMode.Dpi`:
+`CreateGraphics()` reports 96 on this machine regardless of the real display
+scale, so WinForms' own autoscaling silently declines to scale and the box ends
+up 96-DPI-sized while the fonts render large, which squashes the layout.
+
 ## Architecture, and the rule that matters
 
 `CyclerEngine.cs` holds the entire state machine. It has no WinForms, no
