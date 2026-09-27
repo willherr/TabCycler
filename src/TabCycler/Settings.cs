@@ -35,7 +35,7 @@ namespace TabCycler
             return o;
         }
 
-        internal static string Dir
+        internal static string DefaultDir
         {
             get
             {
@@ -45,26 +45,38 @@ namespace TabCycler
             }
         }
 
-        static string FilePath
+        readonly string _dir;
+
+        /// <summary>The directory this instance reads and writes.</summary>
+        public string Dir { get { return _dir; } }
+
+        string FilePath
         {
-            get { return Path.Combine(Dir, "settings.txt"); }
+            get { return Path.Combine(_dir, "settings.txt"); }
         }
 
-        public Settings()
+        /// <summary>
+        /// Loads the real settings file. Pass a directory to read somewhere
+        /// else, which is how the tests exercise the whole disk round-trip
+        /// rather than just the parser.
+        /// </summary>
+        public Settings(string dir = null)
         {
+            _dir = dir ?? DefaultDir;
             LoadFromDisk();
         }
 
-        Settings(bool loadFromDisk)
+        Settings(bool loadFromDisk, string dir = null)
         {
+            _dir = dir ?? DefaultDir;
             if (loadFromDisk) LoadFromDisk();
         }
 
         /// <summary>
         /// A Settings holding only the compiled-in defaults, with no file read.
-        /// The public constructor reads the real settings.txt, so a test using
-        /// it would inherit whatever the widget last saved and would be testing
-        /// the machine rather than the code. This is the hermetic way in.
+        /// The public constructor reads settings.txt, so a test using it against
+        /// the real location would inherit whatever the widget last saved. This
+        /// is the hermetic way in.
         /// </summary>
         public static Settings Defaults()
         {
@@ -72,23 +84,44 @@ namespace TabCycler
         }
 
         /// <summary>
-        /// Reads the real settings file, falling back to defaults on any
-        /// problem. A corrupt or unreadable file must degrade to working
-        /// behaviour, never to a widget that will not start.
+        /// Reads the settings file, falling back to defaults on any problem. A
+        /// corrupt or unreadable file must degrade to working behaviour, never to
+        /// a widget that will not start.
+        ///
+        /// Note the bare StreamReader over the path. This used to be
+        /// <c>new StreamReader(File.ReadAllText(FilePath))</c>, which wraps the
+        /// file's contents in a constructor that wants a path, so it threw
+        /// "Illegal characters in path" on every single launch. The catch below
+        /// swallowed that into Debug, which is invisible in a release build, so
+        /// the widget silently ran on compiled-in defaults and then saved those
+        /// defaults over the user's file on the next write. That is how a
+        /// hand-set 15s kept reverting to 60s, and it survived a round of tests
+        /// because every other test drives LoadFrom directly and never touches
+        /// this method. The failure is now reported through OnLoadFailed so it
+        /// lands in the log a user can actually read.
         /// </summary>
         void LoadFromDisk()
         {
             try
             {
                 if (!File.Exists(FilePath)) return;
-                using (StreamReader r = new StreamReader(File.ReadAllText(FilePath)))
+                using (StreamReader r = new StreamReader(FilePath))
                     LoadFrom(r);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine("TabCycler: settings read failed, using defaults: " + ex);
+                if (OnLoadFailed != null) OnLoadFailed(FilePath, ex);
             }
         }
+
+        /// <summary>
+        /// Reports a failed settings read. The widget points this at its log,
+        /// because "your settings did not load" is precisely the thing that must
+        /// never fail silently, and a Debug.WriteLine is not visible in a
+        /// release build.
+        /// </summary>
+        public static Action<string, Exception> OnLoadFailed = null;
 
         /// <summary>
         /// Parses key=value text over whatever is already in this object, so a
@@ -201,7 +234,7 @@ namespace TabCycler
         {
             try
             {
-                Directory.CreateDirectory(Dir);
+                Directory.CreateDirectory(_dir);
                 SaveTo(FilePath);
             }
             catch (Exception ex)
@@ -210,6 +243,7 @@ namespace TabCycler
                 // settings are not on disk, which is exactly the kind of thing
                 // that must not pass silently.
                 Debug.WriteLine("TabCycler: settings write failed: " + ex);
+                if (OnLoadFailed != null) OnLoadFailed(FilePath, ex);
             }
         }
 

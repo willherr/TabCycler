@@ -55,10 +55,18 @@ namespace TabCycler
         bool _positioned;
         bool _dialogOpen;
 
-        static string LogPath { get { return Path.Combine(Settings.Dir, "tabcycler.log"); } }
+        static string LogPath { get { return Path.Combine(Settings.DefaultDir, "tabcycler.log"); } }
 
         public CyclerForm(IPlatform platform)
         {
+            // Before anything reads settings, so a failed load or save lands in
+            // the log the user can read rather than only in a Debug window that
+            // does not exist in a release build.
+            Settings.OnLoadFailed = delegate(string path, Exception ex)
+            {
+                Log("settings error at " + path + ": " + ex.GetType().Name + ": " + ex.Message);
+            };
+
             _cfg = new Settings();
 
             _engine = new CyclerEngine(platform, _cfg.IntervalSeconds, _cfg.ResumeDelaySeconds,
@@ -413,7 +421,7 @@ namespace TabCycler
                     File.AppendAllText(path, "--- log truncated (1MB) " +
                         DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "---" + Environment.NewLine);
                 }
-                Directory.CreateDirectory(Settings.Dir);
+                Directory.CreateDirectory(_cfg.Dir);
                 File.AppendAllText(path,
                     DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) +
                     "  " + message + Environment.NewLine);
