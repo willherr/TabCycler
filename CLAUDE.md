@@ -1,10 +1,18 @@
 # TabCycler
 
-**Visibility: PRIVATE** while it is being vetted. Tracked in the "flip to
-public" issue; do not make this public until that issue's checklist is done.
+**Visibility: PUBLIC.** Flipped on 2026-09-27 after the safety pass in the
+commit history: no credentials, no personal paths, and commit authorship
+normalised to `me@will-i-am.dev`.
 
 Floating widget that cycles Windows Terminal tabs on an interval so you can
 watch multiple agents work without clicking.
+
+Because this is public now, two things are no longer private thinking:
+
+- Never put a credential, token or key in a commit, an issue or a PR here. The
+  repo is indexed and scraped within days of anything that looks like one.
+- Commit author metadata is public. Use `me@will-i-am.dev`, not an institutional
+  address, per the standing rule about owning the domain long-term.
 
 ## Commands
 
