@@ -108,6 +108,20 @@ tools read to decide you are idle. Measured here: idle time went from 67,975 ms
 to 0 ms on injection. So while it is cycling, you will not flip to Away. See the
 open issue about switching to `wt focus-tab` to avoid that.
 
+## `verification/`
+
+Scratch scripts kept from development: live-desktop checks and a screenshot
+helper. They are **not** part of CI and several of them produced misleading
+results while the tool was being built, so a pass from one of them is not
+evidence. The unit tests are the source of truth. They are here because the
+measurement behind the Teams note above came out of one of them, and because
+hiding that work would misrepresent how the tool was built.
+
+One thing worth knowing if you run them on a busy machine: they poll the system
+input timestamp, and any other program generating input, including browser
+automation agents driving the real cursor, will make them report activity that
+was not yours.
+
 ## Settings
 
 `%LOCALAPPDATA%\TabCycler\settings.txt`, written on exit:
