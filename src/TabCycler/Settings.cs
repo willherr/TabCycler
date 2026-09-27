@@ -19,6 +19,7 @@ namespace TabCycler
         public bool ResetOnScroll = true;
         public bool ResetOnMovement = true;
         public bool IgnoreInjected = true;
+        public bool AlwaysOnTop;
         public int Left, Top;
         public bool SeenLeft, SeenTop;
 
@@ -142,9 +143,12 @@ namespace TabCycler
                     case "resetonmovement":
                         ResetOnMovement = ParseBool(v, ResetOnMovement);
                         break;
-                    case "ignoreinjected":
-                        IgnoreInjected = ParseBool(v, IgnoreInjected);
-                        break;
+                        case "ignoreinjected":
+                            IgnoreInjected = ParseBool(v, IgnoreInjected);
+                            break;
+                        case "alwaysontop":
+                            AlwaysOnTop = ParseBool(v, AlwaysOnTop);
+                            break;
                     case "left":
                         if (int.TryParse(v, out n)) { Left = n; SeenLeft = true; }
                         break;
@@ -188,6 +192,7 @@ namespace TabCycler
                 "ResetOnScroll=" + Bool(ResetOnScroll) + Environment.NewLine +
                 "ResetOnMovement=" + Bool(ResetOnMovement) + Environment.NewLine +
                 "IgnoreInjected=" + Bool(IgnoreInjected) + Environment.NewLine +
+                "AlwaysOnTop=" + Bool(AlwaysOnTop) + Environment.NewLine +
                 "Left=" + Left + Environment.NewLine +
                 "Top=" + Top + Environment.NewLine;
         }

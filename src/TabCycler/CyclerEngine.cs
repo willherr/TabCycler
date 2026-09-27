@@ -23,6 +23,7 @@ namespace TabCycler
         int _hold;
         int _moveThreshold;
         InputOptions _input;
+        bool _alwaysOnTop;
 
         WatchState _state = WatchState.Holding;
         DateTime _now;
@@ -81,8 +82,7 @@ namespace TabCycler
         /// </summary>
         public void ApplySettings(int intervalSeconds, int holdSeconds, int moveThresholdPixels,
                                   InputOptions inputOptions)
-        {
-            if (intervalSeconds < 1) throw new ArgumentOutOfRangeException("intervalSeconds");
+        {            if (intervalSeconds < 1) throw new ArgumentOutOfRangeException("intervalSeconds");
             if (holdSeconds < 0) throw new ArgumentOutOfRangeException("holdSeconds");
             if (moveThresholdPixels < 1) throw new ArgumentOutOfRangeException("moveThresholdPixels");
             inputOptions.Validate();
@@ -140,6 +140,42 @@ namespace TabCycler
 
         public bool ButtonIsHighlighted { get { return _state != WatchState.Cycling; } }
 
+        /// <summary>
+        /// Whether the terminal was in front at the last poll. Kept separately
+        /// from the state because a deliberate pause outlives losing focus: the
+        /// widget should still stop floating over the browser while paused, but
+        /// it must come back paused.
+        /// </summary>
+        public bool TerminalInFront { get; private set; }
+
+        /// <summary>
+        /// Whether the widget should be pinned above other windows.
+        ///
+        /// It only needs to be in front while the terminal is what is being
+        /// watched, because that is the only time the widget is doing anything.
+        /// Staying topmost over everything means floating over the browser, the
+        /// editor and anything else, which is exactly when the user is not
+        /// looking at it and it is only in the way. The AlwaysOnTop setting
+        /// restores the old unconditional behaviour for anyone who wants it.
+        /// </summary>
+        public bool ShouldBeTopMost
+        {
+            get { return _alwaysOnTop || TerminalInFront; }
+        }
+
+        /// <summary>
+        /// Whether to stay above other windows even when the terminal is not in
+        /// front. Off by default, because that is the behaviour that puts the
+        /// widget over the browser. It is a setting rather than a hardcoded
+        /// choice because somebody who parks the terminal behind something else
+        /// and still wants the widget visible wants exactly the old behaviour.
+        /// </summary>
+        public bool AlwaysOnTop
+        {
+            get { return _alwaysOnTop; }
+            set { _alwaysOnTop = value; }
+        }
+
         public string StatusText
         {
             get
@@ -148,6 +184,7 @@ namespace TabCycler
                 {
                     case WatchState.Away: return "Idle";
                     case WatchState.Holding: return "Holding for " + SecondsLeft(_resumeAt) + "s";
+                    case WatchState.Paused: return "Paused";
                     default: return "Cycling every " + _interval + "s";
                 }
             }
@@ -161,6 +198,7 @@ namespace TabCycler
                 {
                     case WatchState.Away: return "focus Windows Terminal to start";
                     case WatchState.Holding: return "reset by " + ArmingPhrase();
+                    case WatchState.Paused: return "press Start to cycle again";
                     default: return "next tab in " + SecondsLeft(_nextCycleAt) + "s";
                 }
             }
@@ -201,7 +239,19 @@ namespace TabCycler
             // Operating the widget: hold everything exactly as it is.
             if (fg == WidgetHandle && fg != IntPtr.Zero) return;
 
-            if (!_p.IsTerminalWindow(fg))
+            TerminalInFront = _p.IsTerminalWindow(fg);
+
+            // A deliberate pause is not a timed wait, so neither losing focus nor
+            // somebody typing is allowed to end it. Only Start does. The
+            // preceding ConsumeUserInput is still worth running so the queue
+            // does not fill with input that arrived while paused.
+            if (_state == WatchState.Paused)
+            {
+                ConsumeUserInput(now);
+                return;
+            }
+
+            if (!TerminalInFront)
             {
                 if (_state != WatchState.Away)
                 {
@@ -260,19 +310,31 @@ namespace TabCycler
             _now = now;
             if (_state == WatchState.Cycling)
             {
-                // Pausing is not its own state: it is the same hold that follows
-                // a return or a keystroke, so there is one way to be stopped
-                // and one way out of it.
-                _state = WatchState.Holding;
-                _resumeAt = now.AddSeconds(_hold);
-                Write("pause pressed -> holding for " + _hold + "s");
+                // Deliberately untimed. Pressing Pause used to set the same
+                // deadline a keystroke does, so the widget quietly started
+                // cycling again after the resume delay, which is not what Pause
+                // means to anyone pressing it.
+                _state = WatchState.Paused;
+                _nextCycleAt = DateTime.MinValue;
+                _resumeAt = DateTime.MinValue;
+                Write("pause pressed -> paused until Start");
             }
             else
             {
-                _state = WatchState.Cycling;
-                _resumeAt = DateTime.MinValue;
-                _nextCycleAt = now.AddSeconds(_interval);
-                Write("start pressed -> first tab in " + _interval + "s, then every " + _interval + "s");
+                // Start restarts the hold, and the hold is one cycle interval
+                // rather than the resume delay. The point is a visible countdown
+                // after the press: a button that snaps straight to "Cycling every
+                // 5s" and then flips a tab a few seconds later gives no sign the
+                // press landed, and clicking Start twice in a row (once to pause,
+                // once to resume) would otherwise look like nothing happened.
+                // Deliberately not the resume delay: that is sized for "I walked
+                // away", and asking someone to wait 60s after they pressed Start
+                // is not what they meant.
+                _state = WatchState.Holding;
+                _resumeAt = now.AddSeconds(_interval);
+                _nextCycleAt = DateTime.MinValue;
+                Write("start pressed -> holding " + _interval + "s, then cycling every " +
+                      _interval + "s");
             }
         }
 

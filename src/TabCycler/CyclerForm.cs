@@ -20,16 +20,25 @@ namespace TabCycler
 
         // Geometry is authored at 96 DPI and multiplied out at runtime. See
         // OnDpiScaled for why that is not simply done once in the constructor.
-        const int W = 384, H = 82;
+        //
+        // W and H are sized to the widest thing that is ever drawn, measured
+        // with GDI rather than guessed: "reset by typing, clicks, scroll or
+        // movement" is 220 authored units at DesignScale 1.4, so 8 + 228 + 8 of
+        // margin is the floor for W. Everything else is tighter than that: the
+        // button row is right-aligned and needs only 108, and the title only 70.
+        // The first version of this was 384 wide with roughly 150 units of
+        // dead space, which showed up as a bar of nothing to the right of the
+        // buttons.
+        const int W = 244, H = 70;
 
         /// <summary>
         /// One knob for how large the widget looks, independent of the display's
-        /// scale. The authored geometry is 320x82 at 96 DPI with 9pt/8.5pt type,
-        /// which is too small to read comfortably on a 100% panel, where a point
-        /// is only a pixel. 1.4 puts the title at 12.6pt and the body at 11.9pt,
-        /// which is ordinary UI body text. Bumping this scales the box and the
-        /// fonts by the same factor, so the layout stays proportional: 448x115
-        /// at 100%, 672x172 at 150%.
+        /// scale. The base type is 9pt/8.5pt, which is too small to read
+        /// comfortably on a 100% panel where a point is only a pixel. 1.4 puts
+        /// the title at 12.6pt and the body at 11.9pt, which is ordinary UI
+        /// body text. Bumping this scales the box and the fonts by the same
+        /// factor, so the layout stays proportional: 342x98 at 100%, 512x147
+        /// at 150%.
         /// </summary>
         const float DesignScale = 1.4f;
 
@@ -44,6 +53,7 @@ namespace TabCycler
         readonly Button _close = new Button();
 
         bool _positioned;
+        bool _dialogOpen;
 
         static string LogPath { get { return Path.Combine(Settings.Dir, "tabcycler.log"); } }
 
@@ -55,7 +65,8 @@ namespace TabCycler
                                        DateTime.Now, _cfg.MoveThresholdPixels,
                                        _cfg.ToInputOptions())
             {
-                Log = Log
+                Log = Log,
+                AlwaysOnTop = _cfg.AlwaysOnTop
             };
 
             SuspendLayout();
@@ -99,10 +110,24 @@ namespace TabCycler
             {
                 OnGearPaint(e.Graphics);
             };
-            _close.Text = "X";
-            _close.ForeColor = Palette.CloseLabel;
-            _close.MouseEnter += delegate { _close.BackColor = Palette.Danger; _close.ForeColor = Color.White; };
-            _close.MouseLeave += delegate { _close.BackColor = Palette.BtnFace; _close.ForeColor = Palette.CloseLabel; };
+            _close.Text = "";
+            _close.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                OnClosePaint(e.Graphics);
+            };
+            // Native behaviour: the face matches the rest of the chrome and only
+            // turns red under the pointer. An always-red close button was the
+            // first attempt and it was wrong twice over: it shouted on a widget
+            // that is otherwise quiet, and the existing MouseEnter/MouseLeave
+            // handlers were still reassigning BackColor underneath it, so the
+            // button came back dark as soon as the pointer left. The face is
+            // MouseOverBackColor, not BackColor, because WinForms uses that
+            // instead while the pointer is over a flat button, which is exactly
+            // why setting BackColor on hover did nothing.
+            _close.BackColor = Palette.BtnFace;
+            _close.FlatAppearance.MouseOverBackColor = Palette.Danger;
+            _close.MouseEnter += delegate { _close.Invalidate(); };
+            _close.MouseLeave += delegate { _close.Invalidate(); };
             _toggle.MouseEnter += delegate { if (_toggle.BackColor == Palette.BtnFace) _toggle.BackColor = Palette.BtnHover; };
             _toggle.MouseLeave += delegate { if (_toggle.BackColor == Palette.BtnFace) _toggle.BackColor = Palette.BtnFace; };
             _gear.MouseEnter += delegate { if (_gear.BackColor == Palette.BtnFace) _gear.BackColor = Palette.BtnHover; };
@@ -146,6 +171,26 @@ namespace TabCycler
         }
 
         int P(int v) { return P96((int)Math.Round(v * DesignScale, MidpointRounding.AwayFromZero)); }
+
+        /// <summary>
+        /// Draws the close glyph as two lines, the way the native button does.
+        /// Font-rendered "X" is soft at these sizes and the diagonals come out
+        /// uneven, whereas lines stay even and crisp at any DPI.
+        ///
+        /// 0.16 rather than the 0.30 tried first, which filled nearly the whole
+        /// 24-unit button and read as a target rather than a close button.
+        /// </summary>
+        void OnClosePaint(Graphics g)
+        {
+            using (Pen p = new Pen(Palette.CloseLabel))
+            {
+                float s = Math.Min(_close.Width, _close.Height) * 0.16f;
+                float cx = _close.Width / 2f, cy = _close.Height / 2f;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.DrawLine(p, cx - s, cy - s, cx + s, cy + s);
+                g.DrawLine(p, cx + s, cy - s, cx - s, cy + s);
+            }
+        }
 
         /// <summary>
         /// Draws the settings gear: a ring, a hub, and teeth around it. Sized
@@ -210,28 +255,30 @@ namespace TabCycler
             ClientSize = new Size(P(W), P(H));
 
             _title.Font = new Font("Segoe UI", 9f * DesignScale, FontStyle.Bold);
-            _title.Location = new Point(P(10), P(8));
-            _title.Size = new Size(P(228), P(18));
+            _title.Location = new Point(P(8), P(4));
+            _title.Size = new Size(P(112), P(18));
 
             _status.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _status.Location = new Point(P(10), P(34));
-            _status.Size = new Size(P(340), P(17));
+            _status.Location = new Point(P(8), P(28));
+            _status.Size = new Size(P(228), P(17));
 
             _detail.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _detail.Location = new Point(P(10), P(56));
-            _detail.Size = new Size(P(340), P(17));
+            _detail.Location = new Point(P(8), P(48));
+            _detail.Size = new Size(P(228), P(17));
 
+            // 52 + 24 + 24 with 4-unit gaps is 108, right-aligned to W - 8, so
+            // the row starts at 128 and the title's 112-unit box clears it.
             _toggle.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _toggle.Location = new Point(P(245), P(5));
-            _toggle.Size = new Size(P(66), P(26));
+            _toggle.Location = new Point(P(128), P(4));
+            _toggle.Size = new Size(P(52), P(22));
 
             _gear.Font = new Font("Segoe UI", 11f * DesignScale);
-            _gear.Location = new Point(P(315), P(5));
-            _gear.Size = new Size(P(30), P(26));
+            _gear.Location = new Point(P(184), P(4));
+            _gear.Size = new Size(P(24), P(22));
 
             _close.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _close.Location = new Point(P(349), P(5));
-            _close.Size = new Size(P(30), P(26));
+            _close.Location = new Point(P(212), P(4));
+            _close.Size = new Size(P(24), P(22));
 
             Invalidate();
         }
@@ -252,7 +299,28 @@ namespace TabCycler
         void OnPoll()
         {
             _engine.Tick(DateTime.Now);
+            ApplyTopMost();
             UpdateLabels();
+        }
+
+        /// <summary>
+        /// Floats the widget above other windows only while the terminal is the
+        /// thing in front, so it does not sit over the browser. The engine owns
+        /// the decision and this only carries it out.
+        ///
+        /// Assigned only on a change: reassigning TopMost every 250ms churns the
+        /// z-order and makes the widget flicker, which is worse than the problem
+        /// being solved.
+        ///
+        /// Left alone while the settings dialog is up. It is modal to this
+        /// window, so a stray focus change from the user clicking another
+        /// application would otherwise drop the dialog behind everything.
+        /// </summary>
+        void ApplyTopMost()
+        {
+            if (_dialogOpen) return;
+            bool want = _engine.ShouldBeTopMost;
+            if (TopMost != want) TopMost = want;
         }
 
         void OnToggleClick()
@@ -433,7 +501,8 @@ namespace TabCycler
                         Left + (Width - dlg.Width) / 2)),
                     Math.Max(wa.Top, Math.Min(wa.Bottom - dlg.Height,
                         Top + (Height - dlg.Height) / 2)));
-                dlg.ShowDialog(this);
+                _dialogOpen = true;
+                try { dlg.ShowDialog(this); } finally { _dialogOpen = false; }
 
                 if (!dlg.Accepted) return;
 
@@ -458,7 +527,12 @@ namespace TabCycler
                     return;
                 }
 
-                _tick.Interval = _engine.IntervalSeconds * 1000;
+                // The tick period is the poll rate and nothing else. It used to
+                // be set to IntervalSeconds here, which conflated the poll with
+                // the cycle: with "cycle every 5s" the whole UI then refreshed
+                // every five seconds and the countdown appeared to jump 15, 10,
+                // 5. How long until the next switch is the engine's business.
+                ApplyTopMost();
 
                 _cfg.IntervalSeconds = _engine.IntervalSeconds;
                 _cfg.ResumeDelaySeconds = _engine.HoldSeconds;
@@ -468,9 +542,12 @@ namespace TabCycler
                 _cfg.ResetOnScroll = opts.ResetOnScroll;
                 _cfg.ResetOnMovement = opts.ResetOnMovement;
                 _cfg.IgnoreInjected = opts.IgnoreInjected;
+                _cfg.AlwaysOnTop = dlg.AlwaysOnTop;
+                _engine.AlwaysOnTop = dlg.AlwaysOnTop;
                 _cfg.Save();
 
                 UpdateLabels();
+                ApplyTopMost();
             }
         }
 

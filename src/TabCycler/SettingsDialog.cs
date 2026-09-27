@@ -37,6 +37,7 @@ namespace TabCycler
         readonly CheckBox _scroll = new CheckBox();
         readonly CheckBox _move = new CheckBox();
         readonly CheckBox _injected = new CheckBox();
+        readonly CheckBox _alwaysOnTop = new CheckBox();
 
         readonly Button _ok = new Button();
         readonly Button _cancel = new Button();
@@ -50,7 +51,7 @@ namespace TabCycler
         readonly Label _unitSeconds2 = new Label();
         readonly Label _unitPixels = new Label();
 
-        const int W = 380, H = 360;
+        const int W = 380, H = 385;
 
         /// <summary>True when the user pressed Save rather than Cancel.</summary>
         public bool Accepted { get; private set; }
@@ -64,6 +65,13 @@ namespace TabCycler
         public bool ResetOnScroll { get { return _scroll.Checked; } }
         public bool ResetOnMovement { get { return _move.Checked; } }
         public bool IgnoreInjected { get { return _injected.Checked; } }
+
+        /// <summary>
+        /// Off by default. The widget already floats above other windows while
+        /// the terminal is in front, which is the only time it is useful; turning
+        /// this on keeps it in front of everything even when it is not.
+        /// </summary>
+        public bool AlwaysOnTop { get { return _alwaysOnTop.Checked; } }
 
         public SettingsDialog(CyclerEngine engine)
         {
@@ -96,7 +104,9 @@ namespace TabCycler
             _scroll.Text = "scroll the terminal";
             _move.Text = "move the mouse";
             _injected.Text = "ignore input sent by other programs";
-            foreach (CheckBox box in new CheckBox[] { _type, _click, _scroll, _move, _injected })
+            _alwaysOnTop.Text = "always stay on top, even over other apps";
+            foreach (CheckBox box in new CheckBox[]
+                     { _type, _click, _scroll, _move, _injected, _alwaysOnTop })
                 MakeCheck(box);
 
             MakeDialogButton(_ok, "Save", 84);
@@ -116,7 +126,7 @@ namespace TabCycler
                 _lblInterval, _lblDelay, _lblThreshold,
                 _unitSeconds, _unitSeconds2, _unitPixels,
                 _interval, _delay, _threshold,
-                _type, _click, _scroll, _move, _injected,
+                _type, _click, _scroll, _move, _injected, _alwaysOnTop,
                 _ok, _cancel, _defaults
             });
 
@@ -151,12 +161,15 @@ namespace TabCycler
             _unitPixels.Location = new Point(P96(288), P96(93));
 
             int y = 150;
-            foreach (CheckBox box in new CheckBox[] { _type, _click, _scroll, _move, _injected })
+            foreach (CheckBox box in new CheckBox[]
+                     { _type, _click, _scroll, _move, _injected, _alwaysOnTop })
             {
                 box.Location = new Point(P96(16), P96(y));
                 y += 25;
             }
 
+            // The button row has to clear the last checkbox, which grew by one
+            // when AlwaysOnTop was added.
             int by = H - 46;
             _defaults.Location = new Point(P96(16), P96(by));
             _cancel.Location = new Point(P96(W - 188), P96(by));
@@ -233,6 +246,7 @@ namespace TabCycler
             _scroll.Checked = o.ResetOnScroll;
             _move.Checked = o.ResetOnMovement;
             _injected.Checked = o.IgnoreInjected;
+            _alwaysOnTop.Checked = engine.AlwaysOnTop;
         }
 
         void ApplyDefaults()
@@ -246,6 +260,7 @@ namespace TabCycler
             _scroll.Checked = d.ResetOnScroll;
             _move.Checked = d.ResetOnMovement;
             _injected.Checked = d.IgnoreInjected;
+            _alwaysOnTop.Checked = false;
         }
 
         /// <summary>

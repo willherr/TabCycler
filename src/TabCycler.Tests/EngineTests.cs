@@ -92,10 +92,58 @@ namespace TabCycler.Tests
         }
 
         /// <summary>Get the engine into Cycling, having skipped the initial hold.</summary>
+        /// <summary>
+        /// Drives the engine to genuinely Cycling and returns the moment it
+        /// began. Start no longer lands in Cycling directly, it restarts the
+        /// hold for one interval first, so a helper returning the press time
+        /// would hand every caller a state that had not arrived yet.
+        /// </summary>
+        DateTime ReachCyclingStart()
+        {
+            _e.Toggle(T0);
+            return RunUntilCycling(T0);
+        }
+
+        /// <summary>
+        /// As above, then on to the first tab switch, returning that moment.
+        /// A good number of tests are written relative to the first switch, so
+        /// this keeps that contract instead of making every caller rediscover
+        /// the extra interval that the hold now costs.
+        /// </summary>
         DateTime ReachCycling()
         {
-            _e.Toggle(T0);                       // Start
-            return T0.AddSeconds(Interval);
+            DateTime t = ReachCyclingStart();
+            for (int i = 0; i < 200 && _p.Injections == 0; i++)
+            {
+                t = t.AddMilliseconds(250);
+                _e.Tick(t);
+            }
+            Assert.True(_p.Injections > 0, "precondition: a tab was actually switched");
+            return t;
+        }
+
+        /// <summary>
+        /// Presses Start at a given moment and runs the clock to the point where
+        /// cycling has actually begun, for tests that care about what the press
+        /// led to rather than the press itself.
+        /// </summary>
+        DateTime StartAndReachCycling(DateTime from)
+        {
+            _e.Toggle(from);
+            return RunUntilCycling(from);
+        }
+
+        DateTime RunUntilCycling(DateTime from)
+        {
+            DateTime t = from;
+            for (int i = 0; i < 200 && _e.State != WatchState.Cycling; i++)
+            {
+                t = t.AddMilliseconds(250);
+                _e.Tick(t);
+            }
+            Assert.Same(WatchState.Cycling, _e.State,
+                "precondition: a Start press must actually reach Cycling");
+            return t;
         }
 
         // ---- construction ---------------------------------------------------
@@ -374,8 +422,8 @@ namespace TabCycler.Tests
 
         // ---- the Start/Pause button -----------------------------------------
 
-        [Test("Pause goes to Holding with a Start button")]
-        public void PauseEntersHolding()
+        [Test("Pause parks in Paused with a Start button")]
+        public void PauseEntersPaused()
         {
             Setup();
             DateTime c = ReachCycling();
@@ -383,9 +431,10 @@ namespace TabCycler.Tests
             Assert.Equal("Pause", _e.ButtonLabel, "precondition: cycling, so it offers Pause");
 
             _e.Toggle(c);
-            Assert.Same(WatchState.Holding, _e.State, "pause stops the cycling");
+            Assert.Same(WatchState.Paused, _e.State, "pause stops the cycling");
             Assert.Equal("Start", _e.ButtonLabel, "and offers Start to resume");
-            Assert.Equal("Holding for 60s", _e.StatusText, "with a full delay pending");
+            Assert.Equal("Paused", _e.StatusText,
+                "no countdown, because nothing is counting down");
         }
 
         [Test("Pause stays paused however much you type")]
@@ -404,45 +453,123 @@ namespace TabCycler.Tests
                 _p.TypeKey();
                 _e.Tick(t);
                 t = t.AddSeconds(3);
-                Assert.Same(WatchState.Holding, _e.State,
+                Assert.Same(WatchState.Paused, _e.State,
                     "must still be paused at step " + i);
             }
             Assert.Equal("Start", _e.ButtonLabel, "and still offer Start");
         }
 
-        [Test("Pause does not fall back to cycling while the hold runs")]
-        public void PauseDoesNotFlickerBack()
+        [Test("Pause stays paused until Start, however long that takes")]
+        public void PauseLatchesUntilStart()
         {
             Setup();
             DateTime c = ReachCycling();
             Poll(c, 1);
             int before = _p.Injections;
+
             _e.Toggle(c);
+            Assert.Same(WatchState.Paused, _e.State, "the press pauses immediately");
 
-            // Poll right up to the moment the hold expires.
-            Poll(c, Hold, stepMs: 100);
-            Assert.Equal(before, _p.Injections, "nothing may switch while the hold runs");
-            Assert.Same(WatchState.Holding, _e.State, "still holding one poll before expiry");
+            // Far longer than the resume delay. Pause used to set the same
+            // deadline a keystroke does, so the widget quietly started cycling
+            // again after the hold, which is not what Pause means.
+            Poll(c, Hold * 5, stepMs: 100);
+            Assert.Equal(before, _p.Injections, "nothing may switch while paused");
+            Assert.Same(WatchState.Paused, _e.State,
+                "and it is still paused well past where the old hold would have ended");
 
-            _e.Tick(c.AddSeconds(Hold));
-            Assert.Same(WatchState.Cycling, _e.State, "and only then does it resume");
+            _e.Toggle(c.AddSeconds(Hold * 5));
+            Assert.Same(WatchState.Holding, _e.State,
+                "Start restarts the hold rather than snapping to cycling");
+            StartAndReachCyclingFrom(c.AddSeconds(Hold * 5));
+            Assert.Same(WatchState.Cycling, _e.State, "and it does lead back to cycling");
         }
 
-        [Test("Start from Holding skips the hold but still waits an interval")]
-        public void StartSkipsHoldButWaitsInterval()
+        /// <summary>
+        /// Drives the clock on from a moment at which Start has just been
+        /// pressed, until cycling has actually begun.
+        /// </summary>
+        void StartAndReachCyclingFrom(DateTime from)
+        {
+            for (int i = 0; i < 200 && _e.State != WatchState.Cycling; i++)
+                _e.Tick(from = from.AddMilliseconds(250));
+            Assert.Same(WatchState.Cycling, _e.State, "Start must lead to cycling");
+        }
+
+        [Test("a pause survives stray input and losing focus")]
+        public void PauseSurvivesInputAndFocus()
+        {
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            _e.Toggle(c);
+            Assert.Same(WatchState.Paused, _e.State, "precondition: paused");
+
+            // Input that would normally re-arm the hold.
+            _p.TypeKey();
+            _p.Click();
+            _e.Tick(c.AddSeconds(1));
+            Assert.Same(WatchState.Paused, _e.State, "a keystroke does not undo a pause");
+
+            // Focus leaving the terminal would normally mean Idle.
+            _p.TerminalInFront = false;
+            _e.Tick(c.AddSeconds(2));
+            Assert.Same(WatchState.Paused, _e.State, "losing focus does not undo a pause");
+            Assert.False(_e.ShouldBeTopMost,
+                "but it stops floating over other windows while the terminal is away");
+
+            // And the pause is still in force when the terminal comes back.
+            _p.TerminalInFront = true;
+            _e.Tick(c.AddSeconds(3));
+            Assert.Same(WatchState.Paused, _e.State, "regaining focus does not undo a pause");
+
+            _e.Toggle(c.AddSeconds(4));
+            Assert.Same(WatchState.Holding, _e.State,
+                "Start from a pause shows the hold, and the pause is genuinely over");
+            StartAndReachCyclingFrom(c.AddSeconds(4));
+            Assert.Same(WatchState.Cycling, _e.State, "and it cycles once started again");
+        }
+
+        [Test("Start restarts the hold for one cycle interval")]
+        public void StartRestartsTheHoldForOneInterval()
         {
             Setup();
             Assert.Same(WatchState.Holding, _e.State, "precondition: holding at launch");
 
             _e.Toggle(T0);
-            Assert.Same(WatchState.Cycling, _e.State, "Start goes straight to cycling");
-            Assert.Equal(0, _p.Injections, "but must not switch on the same instant");
+            Assert.Same(WatchState.Holding, _e.State,
+                "Start shows the hold again rather than snapping to Cycling");
+            Assert.Equal(Interval + "s", _e.StatusText.Substring("Holding for ".Length),
+                "and the hold is one cycle interval, not the 60s resume delay");
+            Assert.Equal(0, _p.Injections, "nothing may switch during the hold");
 
             TickAt(T0, 1, 2, 3, 4);
-            Assert.Equal(0, _p.Injections, "still counting down");
+            Assert.Same(WatchState.Holding, _e.State, "still holding one poll before expiry");
+            Assert.Equal(0, _p.Injections, "and still nothing switched");
 
-            _e.Tick(T0.AddSeconds(5));
-            Assert.Equal(1, _p.Injections, "first switch one interval later");
+            _e.Tick(T0.AddSeconds(Interval));
+            Assert.Same(WatchState.Cycling, _e.State, "the hold elapses into cycling");
+
+            _e.Tick(T0.AddSeconds(Interval + 1));
+            Assert.Equal(0, _p.Injections, "the first switch waits a further interval");
+
+            _e.Tick(T0.AddSeconds(Interval * 2));
+            Assert.Equal(1, _p.Injections, "so nothing is flipped the instant Start is pressed");
+        }
+
+        [Test("Start from Paused also goes through the hold")]
+        public void StartFromPausedShowsTheHold()
+        {
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            _e.Toggle(c);
+            Assert.Same(WatchState.Paused, _e.State, "precondition: paused");
+
+            _e.Toggle(c.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State,
+                "resuming from a pause shows the countdown rather than jumping to cycling");
+            Assert.Equal("Start", _e.ButtonLabel, "and still offers Start while it waits");
         }
 
         [Test("the button label always matches what a press would do")]
@@ -464,8 +591,8 @@ namespace TabCycler.Tests
                 if (label == "Pause")
                     Assert.False(before == after, "a button reading Pause must change the state");
                 else
-                    Assert.Same(WatchState.Cycling, after,
-                        "a button reading Start must end up cycling");
+                    Assert.Same(WatchState.Holding, after,
+                        "a button reading Start shows the hold again, not a jump to cycling");
             }
         }
 
@@ -524,14 +651,14 @@ namespace TabCycler.Tests
             // Holding.
             Setup();
             _e.WidgetHandle = new IntPtr(2000);
-            _e.Toggle(T0);
+            DateTime c = StartAndReachCycling(T0);
             Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
 
             // The click that pressed the button, as the form would report it.
             _p.Click();
             _e.NoteOwnInput();
 
-            _e.Tick(T0.AddSeconds(1));
+            _e.Tick(c.AddSeconds(1));
             Assert.Same(WatchState.Cycling, _e.State,
                 "pressing the widget must not stop the cycling or re-arm the hold");
             Assert.Equal("Cycling every 5s", _e.StatusText, "still reported as cycling");
@@ -544,7 +671,8 @@ namespace TabCycler.Tests
             // recording it the cycler's own keystroke would stop it dead.
             Setup();
             _e.Toggle(T0);
-            _e.Tick(T0.AddSeconds(5));                    // first switch
+            _e.Tick(T0.AddSeconds(5));                    // the hold elapses
+            _e.Tick(T0.AddSeconds(10));                   // first switch
             Assert.Equal(1, _p.Injections, "precondition: it switched once");
             Assert.Same(WatchState.Cycling, _e.State,
                 "its own keystroke must not be mistaken for the user taking over");
@@ -581,9 +709,9 @@ namespace TabCycler.Tests
         public void CyclingCountdownDecreases()
         {
             Setup();
-            _e.Toggle(T0);
+            DateTime c = ReachCyclingStart();
             Assert.Equal("next tab in 5s", _e.DetailText, "shows the full interval first");
-            _e.Tick(T0.AddSeconds(3));
+            _e.Tick(c.AddSeconds(3));
             Assert.Equal("next tab in 2s", _e.DetailText, "counts down to the switch");
         }
 
@@ -732,37 +860,36 @@ namespace TabCycler.Tests
         public void ApplySettingsChangesInterval()
         {
             Setup();
-            _e.Toggle(T0);
-            _e.Tick(T0.AddSeconds(5));
-            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+            DateTime c = ReachCycling();
+            int before = _p.Injections;
 
             _e.ApplySettings(30, Hold, CyclerEngine.DefaultMoveThresholdPixels, InputOptions.Default);
             Assert.Equal(30, _e.IntervalSeconds, "the new interval is readable");
 
             // Still inside the old 5s wait, which must not now fire.
-            _e.Tick(T0.AddSeconds(6));
-            Assert.Equal(1, _p.Injections, "the old short interval no longer applies");
+            _e.Tick(c.AddSeconds(1));
+            Assert.Equal(before, _p.Injections, "the old short interval no longer applies");
 
-            _e.Tick(T0.AddSeconds(35));
-            Assert.Equal(2, _p.Injections, "and the new long one does");
+            _e.Tick(c.AddSeconds(31));
+            Assert.Equal(before + 1, _p.Injections, "and the new long one does");
         }
 
         [Test("a longer interval does not fire early just because the old deadline passed")]
         public void ApplySettingsReschedulesRatherThanKeepingPhase()
         {
             Setup();
-            _e.Toggle(T0);
-            _e.Tick(T0.AddSeconds(5));
-            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+            DateTime c = ReachCycling();
+            int before = _p.Injections;
 
-            // Change the interval at t=5, when the t=10 deadline was already set.
+            // The next switch is now c+5. Change the interval at c+1, when that
+            // deadline is already set.
             _e.ApplySettings(60, Hold, CyclerEngine.DefaultMoveThresholdPixels, InputOptions.Default);
 
-            _e.Tick(T0.AddSeconds(20));
-            Assert.Equal(1, _p.Injections,
+            _e.Tick(c.AddSeconds(20));
+            Assert.Equal(before, _p.Injections,
                 "preserving the old phase would have switched here, which is surprising");
-            _e.Tick(T0.AddSeconds(70));
-            Assert.Equal(2, _p.Injections, "and the new interval still fires");
+            _e.Tick(c.AddSeconds(62));
+            Assert.Equal(before + 1, _p.Injections, "and the new interval still fires");
         }
 
         [Test("a new resume delay applies from the moment of the change")]
@@ -805,22 +932,19 @@ namespace TabCycler.Tests
         public void ApplySettingsChangesThreshold()
         {
             Setup();
-            _e.Toggle(T0);
-            _e.Tick(T0.AddSeconds(5));
-            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+            DateTime c = ReachCycling();
 
             // DriftPointer moves 2px, which is under the 8px default and over 1.
             _p.DriftPointer();
-            _e.Tick(T0.AddSeconds(6));
+            _e.Tick(c.AddSeconds(1));
             Assert.Same(WatchState.Cycling, _e.State, "precondition: 2px is under 8");
 
             _e.ApplySettings(Interval, Hold, 1, InputOptions.Default);
             Assert.Equal(1, _e.MoveThresholdPixels, "the new threshold is readable");
 
-            _e.Toggle(T0.AddSeconds(7));
-            _e.Tick(T0.AddSeconds(12));
+            _e.Tick(c.AddSeconds(2));
             _p.DriftPointer();
-            _e.Tick(T0.AddSeconds(13));
+            _e.Tick(c.AddSeconds(3));
             Assert.Same(WatchState.Holding, _e.State, "a 2px nudge now counts");
         }
 
@@ -852,9 +976,8 @@ namespace TabCycler.Tests
         public void ApplySettingsRejectionIsAtomic()
         {
             Setup();
-            _e.Toggle(T0);
-            _e.Tick(T0.AddSeconds(5));
-            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+            DateTime c = ReachCycling();
+            int before = _p.Injections;
 
             try
             {
@@ -865,8 +988,10 @@ namespace TabCycler.Tests
             {
             }
 
-            _e.Tick(T0.AddSeconds(11));
-            Assert.Equal(2, _p.Injections,
+            // The original 5s interval still governs, so the switch lands where
+            // it would have without the rejected call.
+            _e.Tick(c.AddSeconds(5));
+            Assert.Equal(before + 1, _p.Injections,
                 "the deadline was left alone, so the original 5s interval still governs");
         }
 
@@ -920,6 +1045,66 @@ namespace TabCycler.Tests
             off.IgnoreInjected = false;
             Assert.Equal("none", CyclerEngine.DescribeInput(off),
                 "only with nothing left at all is it 'none'");
+        }
+
+        // ---- floating above other windows only when it is useful --------------
+
+        [Test("the widget only floats above other apps while the terminal is in front")]
+        public void TopMostFollowsTerminalFocus()
+        {
+            Setup();
+            _e.Tick(T0);
+            Assert.True(_e.ShouldBeTopMost, "terminal in front, so it stays in front");
+
+            _p.TerminalInFront = false;
+            _e.Tick(T0.AddSeconds(1));
+            Assert.Same(WatchState.Away, _e.State, "precondition: the terminal went away");
+            Assert.False(_e.ShouldBeTopMost,
+                "over the browser is exactly when the widget is only in the way");
+
+            _p.TerminalInFront = true;
+            _e.Tick(T0.AddSeconds(2));
+            Assert.True(_e.ShouldBeTopMost, "and it comes back when the terminal does");
+        }
+
+        [Test("AlwaysOnTop restores the unconditional behaviour")]
+        public void AlwaysOnTopOverridesFocus()
+        {
+            Setup();
+            _p.TerminalInFront = false;
+            _e.Tick(T0);
+            Assert.False(_e.ShouldBeTopMost, "precondition: not topmost with the terminal away");
+
+            _e.AlwaysOnTop = true;
+            Assert.True(_e.ShouldBeTopMost, "the setting pins it regardless");
+
+            _e.AlwaysOnTop = false;
+            Assert.False(_e.ShouldBeTopMost, "and turning it off takes effect immediately");
+        }
+
+        [Test("AlwaysOnTop is off by default")]
+        public void AlwaysOnTopDefaultsOff()
+        {
+            Setup();
+            Assert.False(_e.AlwaysOnTop,
+                "defaulting it on would put the widget over every app, which was the complaint");
+        }
+
+        [Test("the button offers Start while paused, and the status says so")]
+        public void PausedIsLabelledHonestly()
+        {
+            Setup();
+            DateTime c = ReachCycling();
+            Poll(c, 1);
+            Assert.Equal("Pause", _e.ButtonLabel, "precondition: cycling offers Pause");
+
+            _e.Toggle(c);
+            Assert.Same(WatchState.Paused, _e.State, "precondition: paused");
+            Assert.Equal("Start", _e.ButtonLabel, "the only way out is offered");
+            Assert.True(_e.ButtonIsHighlighted, "and it is highlighted, because it is what to do");
+            Assert.Equal("Paused", _e.StatusText, "the status does not imply a countdown");
+            Assert.Equal("press Start to cycle again", _e.DetailText,
+                "and the hint says how to get out");
         }
     }
 }
