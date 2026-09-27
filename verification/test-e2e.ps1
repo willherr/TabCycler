@@ -39,7 +39,7 @@ public static class Ui {
 }
 '@
 
-$root = 'C:\Users\wch\Tools\TabCycler'
+$root = Split-Path -Parent $PSScriptRoot
 $log  = "$env:LOCALAPPDATA\TabCycler\tabcycler.log"
 
 function Get-WidgetRoot {

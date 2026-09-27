@@ -43,7 +43,7 @@ public static class Inp {
 }
 '@
 
-$root = 'C:\Users\wch\Tools\TabCycler'
+$root = Split-Path -Parent $PSScriptRoot
 $log  = "$env:LOCALAPPDATA\TabCycler\tabcycler.log"
 $dir  = Split-Path $log
 

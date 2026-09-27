@@ -44,7 +44,7 @@ $log = "$env:LOCALAPPDATA\TabCycler\tabcycler.log"
 Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
 Get-Process -Name TabCycler -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 700
-Start-Process -FilePath 'C:\Users\wch\Tools\TabCycler\TabCycler.exe'
+Start-Process -FilePath (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\TabCycler\TabCycler.exe')
 Start-Sleep -Seconds 2
 
 $wt = Get-Process -Name WindowsTerminal | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
