@@ -27,6 +27,14 @@ namespace TabCycler
         public static readonly Color StartFace = Color.FromArgb(0x4A, 0x4A, 0x4A);
         public static readonly Color Danger = Color.FromArgb(0xC4, 0x2B, 0x1C);
 
+        /// <summary>
+        /// Hover for the close button. A lighter red than Danger but still
+        /// passing: white text on it is 4.53:1. The first candidate,
+        /// #E03A2A, was 4.37:1 and failed, so this is the lightest red that
+        /// keeps the glyph legible.
+        /// </summary>
+        public static readonly Color DangerHover = Color.FromArgb(0xDC, 0x38, 0x26);
+
         /// <summary>Label colour on the button faces, 9.39:1 on BtnFace.</summary>
         public static readonly Color BtnLabel = Color.FromArgb(0xDE, 0xDE, 0xDE);
 

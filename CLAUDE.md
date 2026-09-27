@@ -20,7 +20,7 @@ Because this is public now, two things are no longer private thinking:
 # Build the exe
 pwsh -NoProfile -File .\src\TabCycler\build.ps1
 
-# Run the tests (71 of them, no desktop needed)
+# Run the tests (77 of them, no desktop needed)
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```
@@ -162,9 +162,55 @@ timer, a click read as user input, a label that disagreed with its own click
 handler). If a change needs real input, real focus or a real window to verify,
 that is a signal the logic is in the wrong place, not that the test is missing.
 
-The engine has exactly three states, and "stopped" deliberately has one
-spelling: pausing, going idle after a return, and reacting to input all land in
-`Holding`. Do not add a second way to be stopped.
+The engine has four states, and the rule about them is narrower than it looks.
+It used to say "never add a fourth state", because a bool alongside the state
+enum had shipped once and the two could disagree, so a button press did the
+opposite of what its label promised. That reasoning was right and the
+conclusion was wrong: folding Pause into `Holding` conflated a **timed wait
+that ends by itself** with a **deliberate pause that ends when the user says
+so**, and Pause quietly restarted after the resume delay.
+
+So `Paused` exists. What is still forbidden is a second way to say stopped, and
+in particular a bool next to this enum, which is how the original disagreement
+happened.
+
+- `Paused` survives losing focus and ignores input. A pause that a background
+  process can undo is not a pause, and this machine has background processes
+  driving the cursor.
+- **Start restarts the hold for one cycle interval**, then cycles. Not zero, and
+  not the resume delay. Zero means the button gives no sign the press landed,
+  and pressing Start twice in a row looks like nothing happened. The resume
+  delay is sized for "I walked away", and making someone wait 60s after they
+  pressed Start is not what they meant.
+- `ShouldBeTopMost` follows `TerminalInFront`, not the state, because a pause
+  outlives losing focus: the widget must stop floating over the browser while
+  paused but still come back paused. `AlwaysOnTop` is the setting that pins it
+  regardless.
+
+## The poll timer is 250ms and nothing else
+
+The widget's countdown is only as smooth as the poll that redraws it. The tick
+is a 250ms UI poll, and `IntervalSeconds` is how long the engine waits between
+tab switches. Those are different numbers.
+
+They were conflated once: saving settings did
+`_tick.Interval = IntervalSeconds * 1000`, so with "cycle every 5s" the entire UI
+refreshed every five seconds and the countdown appeared to jump 15, 10, 5. The
+remedy is not to retune the poll but to keep the two apart. If you find yourself
+writing to `_tick.Interval` anywhere but the constructor, that is the bug.
+
+## One instance only
+
+`Program.Main` takes a named mutex. Two instances overwrite each other's
+settings and position, and the winner is decided by who closes last: an
+instance holding stale timings writes them over whatever the newer one saved,
+so a setting the user had just changed silently reverted on the next launch.
+This is not hypothetical, it is how a "wait after you stop" value of 15s went
+back to 60s.
+
+The second launch exits **silently**. A "already running" message box would take
+focus off the terminal, which is the one thing this widget exists not to do, and
+it would do it on an accidental double-launch.
 
 ## Input detection, and the limit that cannot be engineered away
 
@@ -190,13 +236,17 @@ each input kind can be armed or disarmed individually.
 ## Settings and logs
 
 - `%LOCALAPPDATA%\TabCycler\settings.txt`: interval, resume delay, movement
-  threshold, the four input toggles, `IgnoreInjected`, and window position.
-  Edited from the gear button on the widget, and still hand-editable: the parse
-  is lenient and keeps defaults for anything it cannot read. **Use
+  threshold, the four input toggles, `IgnoreInjected`, `AlwaysOnTop`, and window
+  position. Edited from the gear button on the widget, and still hand-editable:
+  the parse is lenient and keeps defaults for anything it cannot read. **Use
   `Settings.Defaults()` in tests, never `new Settings()`**, because the public
   constructor reads the real file and a test using it would inherit whatever the
   widget last saved. `LoadFrom(TextReader)` and `Serialize()` are the seam that
   keeps the tests off the disk.
+- `AlwaysOnTop` is **off** by default. The widget already floats above other
+  windows while the terminal is in front, which is the only time it is useful;
+  the setting restores the old unconditional behaviour for anyone who parks the
+  terminal behind something else.
 - `%LOCALAPPDATA%\TabCycler\tabcycler.log`: timestamped state transitions,
   settings applications and DPI changes, rotated at 1 MB. This is the first
   place to look when behaviour is odd.
@@ -220,6 +270,24 @@ asked for.
 The hint line under the status is built from whatever is actually enabled, so
 it cannot claim movement re-arms the hold when movement is switched off. With
 everything off it says so rather than showing an empty list.
+
+## Icons are painted, not typed
+
+The gear and the close glyph are drawn in `OnGearPaint` / `OnClosePaint`. A
+literal U+2699 in the source is a gamble: `csc` reads these files as UTF-8 only
+when they carry a BOM, and without one the glyph arrives mangled, which shows up
+on someone else's build and nowhere else.
+
+The close button follows the native pattern: the face matches the chrome and
+turns red only under the pointer. The face has to be
+`FlatAppearance.MouseOverBackColor`, not `BackColor`, because WinForms uses that
+instead while the pointer is over a flat button. Setting `BackColor` from a
+`MouseEnter` handler therefore does nothing, and doing both makes the button
+change colour twice per hover. An always-red close button was also tried and
+rejected: it shouts on a widget that is otherwise quiet.
+
+Both icons are sized as a fraction of the button so they land identically at
+100% and 150%.
 
 ## Colours
 

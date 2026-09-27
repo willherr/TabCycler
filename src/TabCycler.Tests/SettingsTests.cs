@@ -34,6 +34,9 @@ namespace TabCycler.Tests
             Assert.True(s.ResetOnScroll, "scrolling arms by default");
             Assert.True(s.ResetOnMovement, "movement arms by default");
             Assert.True(s.IgnoreInjected, "injected input is ignored by default");
+            Assert.False(s.AlwaysOnTop,
+                "always-on-top is off by default, because the widget floats itself "
+                + "only while the terminal is in front");
         }
 
         [Test("every value round-trips through save and load")]
@@ -48,6 +51,7 @@ namespace TabCycler.Tests
             first.ResetOnScroll = false;
             first.ResetOnMovement = false;
             first.IgnoreInjected = false;
+            first.AlwaysOnTop = true;
             first.Left = -1440;
             first.Top = 25;
 
@@ -61,6 +65,7 @@ namespace TabCycler.Tests
             Assert.False(second.ResetOnScroll, "scrolling can be turned off");
             Assert.False(second.ResetOnMovement, "movement can be turned off");
             Assert.False(second.IgnoreInjected, "injected filtering can be turned off");
+            Assert.True(second.AlwaysOnTop, "always-on-top can be turned on");
             Assert.Equal(-1440, second.Left, "a negative position survives");
             Assert.True(second.SeenLeft, "position is marked as seen");
             Assert.Equal(25, second.Top, "top survives");
