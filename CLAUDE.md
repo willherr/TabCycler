@@ -154,6 +154,27 @@ The engine has exactly three states, and "stopped" deliberately has one
 spelling: pausing, going idle after a return, and reacting to input all land in
 `Holding`. Do not add a second way to be stopped.
 
+## Input detection, and the limit that cannot be engineered away
+
+`Win32Platform` installs `WH_KEYBOARD_LL` and `WH_MOUSE_LL` and reports typed
+events (key, click, scroll, movement) through `DrainInput()`. That replaced
+`GetLastInputInfo`, which could only say that something happened, never what.
+The old path is still there as the fallback when a hook cannot be installed.
+
+**Do not try to identify the process behind an input event.** The
+`LLKHF_INJECTED` / `LLMHF_INJECTED` bit is set by `SendInput` only.
+Automation that drives the real cursor through `SetCursorPos` or `mouse_event`
+produces events with the bit clear, which are indistinguishable from a human
+hand, and Windows exposes no way to attribute such an event to a process. Some
+background automation on this machine will always be counted as the user. This
+was measured, not guessed, and an hour went into the wrong lead because the
+observation that started it was `flags == 0` on every event.
+
+What is worth remembering: the widget's own `SendInput` for Ctrl+Tab is the one
+source of synthetic input here that *is* correctly ignored, and it used to reset
+its own hold. `IgnoreInjected` in `settings.txt` turns the filtering off, and
+each input kind can be armed or disarmed individually.
+
 ## Settings and logs
 
 - `%LOCALAPPDATA%\TabCycler\settings.txt`: interval, resume delay, window
