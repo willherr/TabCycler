@@ -145,3 +145,7 @@ Timings are read at launch, so changing them needs no rebuild.
 - The keystroke goes to whatever has focus at that instant. Focus is
   re-checked immediately before each send, so the window is microseconds wide,
   but it is not zero.
+
+## Support
+
+If this is useful, you can support it here: https://buymeacoffee.com/will.i.am.dev
