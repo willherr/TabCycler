@@ -145,5 +145,55 @@ namespace TabCycler.Tests
             Assert.Equal(once.Serialize(), twice.Serialize(),
                 "writing then reading changes nothing");
         }
+
+        [Test("a truncated file keeps the settings it still contains")]
+        public void TruncatedFileKeepsWhatItHas()
+        {
+            // The bug this documents: LoadFrom starts from the compiled-in
+            // defaults and only overrides the keys it finds. A half-written
+            // file therefore does not fail, it silently reverts every key it
+            // lost, and the next save makes that permanent. Save is now atomic
+            // so this state should not be reachable, but the parse must still
+            // not turn a prefix of the file into a total reset.
+            Settings s = From("IntervalSeconds=2\nResumeDelay");
+            Assert.Equal(2, s.IntervalSeconds, "the complete key before the cut is honoured");
+            Assert.Equal(60, s.ResumeDelaySeconds,
+                "a key that was cut mid-line falls back, which is the one thing "
+                + "atomic writes exist to prevent");
+            Assert.Equal(8, s.MoveThresholdPixels, "and so does a key after the cut");
+        }
+
+        [Test("save is atomic and leaves no partial or stray file")]
+        public void SaveIsAtomic()
+        {
+            // Against a temporary file, not the real settings: the point is how
+            // SaveTo writes, not the text, and a test that wrote to the live
+            // settings.txt would clobber whatever the widget is using.
+            string dir = Path.Combine(Path.GetTempPath(),
+                "TabCyclerTests_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string path = Path.Combine(dir, "settings.txt");
+                File.WriteAllText(path, "# old contents\nIntervalSeconds=2\n");
+
+                Settings s = Settings.Defaults();
+                s.IntervalSeconds = 7;
+                s.SaveTo(path);
+
+                string written = File.ReadAllText(path);
+                Assert.True(written.Contains("IntervalSeconds=7"),
+                    "the swap landed, so the new contents are on disk");
+                Assert.False(written.Contains("old contents"),
+                    "and none of the previous contents survived");
+                Assert.Equal(false, File.Exists(path + ".tmp"),
+                    "the temporary file it was written through is gone, not left "
+                    + "to be mistaken for the settings later");
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
     }
 }

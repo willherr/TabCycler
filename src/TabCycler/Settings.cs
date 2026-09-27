@@ -202,12 +202,39 @@ namespace TabCycler
             try
             {
                 Directory.CreateDirectory(Dir);
-                File.WriteAllText(FilePath, Serialize());
+                SaveTo(FilePath);
             }
             catch (Exception ex)
             {
+                // Logged, never swallowed: a failed save means the user's
+                // settings are not on disk, which is exactly the kind of thing
+                // that must not pass silently.
                 Debug.WriteLine("TabCycler: settings write failed: " + ex);
             }
+        }
+
+        /// <summary>
+        /// Writes to an arbitrary path, atomically. Separate from <see cref="Save"/>
+        /// so the atomic-swap behaviour can be tested against a temporary file
+        /// instead of the settings the widget is actually using.
+        /// </summary>
+        public void SaveTo(string path)
+        {
+            // Atomic on purpose. Writing the file in place can be caught
+            // half-written by a crash or a force-kill, and because the parse
+            // keeps the compiled-in default for any key it cannot find, a
+            // truncated file does not fail loudly, it quietly reverts every
+            // setting it lost to 5s/60s and then bakes that in on the next
+            // save. That is how a hand-set 15s became 60s more than once on
+            // this machine. Writing a sibling and swapping it in means the real
+            // file is either the old contents or the new ones, never a prefix
+            // of either.
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, Serialize());
+            if (File.Exists(path))
+                File.Replace(tmp, path, null);   // atomic swap
+            else
+                File.Move(tmp, path);
         }
     }
 }
