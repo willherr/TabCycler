@@ -21,40 +21,39 @@ namespace TabCycler
         readonly int _interval;
         readonly int _hold;
         readonly int _moveThreshold;
+        readonly InputOptions _input;
 
         WatchState _state = WatchState.Holding;
         DateTime _now;
         DateTime _resumeAt;
         DateTime _nextCycleAt = DateTime.MinValue;
-
-        uint _lastStamp;
-        bool _haveStamp;
-        CursorPos _lastCursor;
+        CursorPos _lastMovementPos;
+        bool _haveMovementPos;
 
         public CyclerEngine(IPlatform platform, int intervalSeconds, int holdSeconds,
-                            DateTime start, int moveThresholdPixels = DefaultMoveThresholdPixels)
+                            DateTime start, int moveThresholdPixels = DefaultMoveThresholdPixels,
+                            InputOptions? inputOptions = null)
         {
             if (platform == null) throw new ArgumentNullException("platform");
             if (intervalSeconds < 1) throw new ArgumentOutOfRangeException("intervalSeconds");
             if (holdSeconds < 0) throw new ArgumentOutOfRangeException("holdSeconds");
             if (moveThresholdPixels < 1) throw new ArgumentOutOfRangeException("moveThresholdPixels");
+            if (inputOptions.HasValue) inputOptions.Value.Validate();
 
             _p = platform;
             _interval = intervalSeconds;
             _hold = holdSeconds;
             _moveThreshold = moveThresholdPixels;
+            _input = inputOptions.HasValue ? inputOptions.Value : InputOptions.Default;
             _now = start;
             _state = WatchState.Holding;
             _resumeAt = start.AddSeconds(_hold);
-
-            // Treat whatever the user did before launch as already consumed, so
-            // starting the widget does not immediately report fresh input.
-            CaptureBaseline();
         }
 
         public int IntervalSeconds { get { return _interval; } }
         public int HoldSeconds { get { return _hold; } }
         public int MoveThresholdPixels { get { return _moveThreshold; } }
+        public InputOptions Input { get { return _input; } }
         public WatchState State { get { return _state; } }
 
         /// <summary>
@@ -197,14 +196,13 @@ namespace TabCycler
         }
 
         /// <summary>
-        /// Marks the current input stamp as handled because it was the widget's
-        /// own button. Without this the click is read as the user taking over
-        /// and the hold springs back on the very next poll.
+        /// Throws away anything pending because the widget's own controls were
+        /// clicked. Operating the widget is not terminal input, and without
+        /// this the click is read as the user taking over.
         /// </summary>
         public void NoteOwnInput()
         {
-            _lastStamp = _p.LastInputStamp();
-            _haveStamp = true;
+            _p.DiscardPendingInput();
         }
 
         void Cycle(DateTime now)
@@ -218,66 +216,87 @@ namespace TabCycler
                 return;
             }
 
+            // The hook sees its own keystrokes and flags them injected, so
+            // there is no longer a stamp to reconcile afterwards.
             _p.InjectNextTab();
-            // The injection bumps the system input stamp; record it so it is
-            // not read back as the user on the next poll.
-            NoteOwnInput();
             _nextCycleAt = now.AddSeconds(_interval);
             Write("cycle -> sent Ctrl+Tab");
         }
 
         /// <summary>
-        /// True when the user did something deliberate since the last poll:
-        /// a key press, a click, a wheel event, or a real movement of the
-        /// pointer.
+        /// True when the user did something deliberate since the last poll.
         ///
-        /// Wheel events and clicks leave the pointer exactly where it was, so
-        /// "the stamp changed but the cursor did not move" catches those. A
-        /// pointer that did move is also deliberate, but only once it has
-        /// travelled further than the threshold in a single poll. Without that
-        /// floor, sensor jitter and a resting hand re-armed the hold on every
-        /// poll and the countdown never got past its starting value, which is
-        /// what made the widget look stuck at 60.
+        /// The platform reports typed events, so this filters on the kind and on
+        /// whether it was synthesised. Movement is the one kind that still needs
+        /// a distance floor: the hook delivers a WM_MOUSEMOVE per sample, so a
+        /// resting hand or a jittery sensor produces a stream of one or two pixel
+        /// events, and without a floor the hold re-arms on every poll and the
+        /// countdown never gets past its starting value.
         /// </summary>
         bool ConsumeUserInput(DateTime now)
         {
-            uint stamp = _p.LastInputStamp();
-            bool isNew = !_haveStamp || stamp != _lastStamp;
+            System.Collections.Generic.List<InputEvent> events = _p.DrainInput();
+            if (events == null || events.Count == 0) return false;
 
-            CursorPos cursor = _p.CursorPosition();
-            int dx = Math.Abs(cursor.X - _lastCursor.X);
-            int dy = Math.Abs(cursor.Y - _lastCursor.Y);
-            _lastCursor = cursor;
+            // Movement is summed across the poll rather than judged per event,
+            // because a hooked mouse produces many small samples for one real
+            // sweep, and a single event's size means nothing on its own.
+            int movedTotal = 0;
+            CursorPos previous = _lastMovementPos;
+            bool sawMovement = false;
 
-            if (isNew)
+            foreach (InputEvent e in events)
             {
-                _lastStamp = stamp;
-                _haveStamp = true;
+                // The first position seen establishes a baseline. How far the
+                // pointer travelled before that is unknowable, and counting it
+                // made a single small step look like a sweep across the screen.
+                if (!_haveMovementPos)
+                {
+                    _haveMovementPos = true;
+                    _lastMovementPos = e.Position;
+                    previous = e.Position;
+                    if (e.Kind == InputKind.Movement) continue;
+                }
+
+                if (_input.IgnoreInjected && e.Injected)
+                {
+                    Write("input ignored: " + e.Kind + " was injected, not the user");
+                    continue;
+                }
+                if (!_input.ArmsFor(e.Kind))
+                {
+                    Write("input ignored: " + e.Kind + " is switched off in settings");
+                    continue;
+                }
+                if (e.Kind == InputKind.Movement)
+                {
+                    sawMovement = true;
+                    movedTotal += Math.Abs(e.Position.X - previous.X)
+                                + Math.Abs(e.Position.Y - previous.Y);
+                    previous = e.Position;
+                    continue;
+                }
+
+                // A real key, click or scroll, and that kind is enabled.
+                _lastMovementPos = e.Position;
+                _resumeAt = now.AddSeconds(_hold);
+                Write("input -> holding " + _hold + "s (" + e.Kind + ")");
+                return true;
             }
 
-            if (!isNew) return false;
+            if (!sawMovement) return false;
 
-            bool pointerHeldStill = (dx == 0 && dy == 0);
-            bool movedDeliberately = (dx >= _moveThreshold || dy >= _moveThreshold);
-            if (!pointerHeldStill && !movedDeliberately)
+            _lastMovementPos = previous;
+            if (movedTotal < _moveThreshold)
             {
-                Write("input ignored: moved " + dx + "x" + dy + "px, below the " +
+                Write("input ignored: moved " + movedTotal + "px total, below the " +
                       _moveThreshold + "px threshold");
                 return false;
             }
 
             _resumeAt = now.AddSeconds(_hold);
-            Write("input -> holding " + _hold + "s (" +
-                  (pointerHeldStill ? "key/click/scroll" : "moved " + dx + "x" + dy + "px") +
-                  ", stamp " + stamp + ")");
+            Write("input -> holding " + _hold + "s (moved " + movedTotal + "px)");
             return true;
-        }
-
-        void CaptureBaseline()
-        {
-            _lastStamp = _p.LastInputStamp();
-            _haveStamp = true;
-            _lastCursor = _p.CursorPosition();
         }
 
         void Write(string message)

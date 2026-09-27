@@ -14,8 +14,25 @@ namespace TabCycler
         public int IntervalSeconds = 5;
         public int ResumeDelaySeconds = 60;
         public int MoveThresholdPixels = CyclerEngine.DefaultMoveThresholdPixels;
+        public bool ResetOnKeyPress = true;
+        public bool ResetOnClick = true;
+        public bool ResetOnScroll = true;
+        public bool ResetOnMovement = true;
+        public bool IgnoreInjected = true;
         public int Left, Top;
         public bool SeenLeft, SeenTop;
+
+        /// <summary>The input half of the settings, for the engine.</summary>
+        public InputOptions ToInputOptions()
+        {
+            InputOptions o = new InputOptions();
+            o.ResetOnKeyPress = ResetOnKeyPress;
+            o.ResetOnClick = ResetOnClick;
+            o.ResetOnScroll = ResetOnScroll;
+            o.ResetOnMovement = ResetOnMovement;
+            o.IgnoreInjected = IgnoreInjected;
+            return o;
+        }
 
         internal static string Dir
         {
@@ -57,6 +74,21 @@ namespace TabCycler
                         case "movethresholdpixels":
                             if (int.TryParse(v, out n) && n >= 1) MoveThresholdPixels = n;
                             break;
+                        case "resetonkeypress":
+                            ResetOnKeyPress = ParseBool(v, ResetOnKeyPress);
+                            break;
+                        case "resetonclick":
+                            ResetOnClick = ParseBool(v, ResetOnClick);
+                            break;
+                        case "resetonscroll":
+                            ResetOnScroll = ParseBool(v, ResetOnScroll);
+                            break;
+                        case "resetonmovement":
+                            ResetOnMovement = ParseBool(v, ResetOnMovement);
+                            break;
+                        case "ignoreinjected":
+                            IgnoreInjected = ParseBool(v, IgnoreInjected);
+                            break;
                         case "left":
                             if (int.TryParse(v, out n)) { Left = n; SeenLeft = true; }
                             break;
@@ -72,6 +104,22 @@ namespace TabCycler
             }
         }
 
+        /// <summary>
+        /// Lenient boolean parse. An unrecognised value keeps the default rather
+        /// than throwing, so a hand-edited or corrupted file degrades to
+        /// working behaviour instead of a widget that will not start.
+        /// </summary>
+        static bool ParseBool(string v, bool fallback)
+        {
+            if (v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1"
+                || v.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
+            if (v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0"
+                || v.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
+            return fallback;
+        }
+
+        static string Bool(bool b) { return b ? "true" : "false"; }
+
         public void Save()
         {
             try
@@ -82,6 +130,11 @@ namespace TabCycler
                     "IntervalSeconds=" + IntervalSeconds + Environment.NewLine +
                     "ResumeDelaySeconds=" + ResumeDelaySeconds + Environment.NewLine +
                     "MoveThresholdPixels=" + MoveThresholdPixels + Environment.NewLine +
+                    "ResetOnKeyPress=" + Bool(ResetOnKeyPress) + Environment.NewLine +
+                    "ResetOnClick=" + Bool(ResetOnClick) + Environment.NewLine +
+                    "ResetOnScroll=" + Bool(ResetOnScroll) + Environment.NewLine +
+                    "ResetOnMovement=" + Bool(ResetOnMovement) + Environment.NewLine +
+                    "IgnoreInjected=" + Bool(IgnoreInjected) + Environment.NewLine +
                     "Left=" + Left + Environment.NewLine +
                     "Top=" + Top + Environment.NewLine);
             }

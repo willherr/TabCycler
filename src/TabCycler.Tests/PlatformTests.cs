@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 
 namespace TabCycler.Tests
 {
@@ -10,10 +9,12 @@ namespace TabCycler.Tests
     /// first call. Renaming a DllImport without setting EntryPoint passed CI,
     /// passed every logic test, and then crashed the widget 250ms after launch.
     ///
-    /// The read-only calls are safe anywhere on Windows, including a headless
-    /// CI runner, where GetForegroundWindow simply returns zero. InjectNextTab
-    /// is deliberately NOT called: it would send real keystrokes to whatever
-    /// the runner happens to have focused.
+    /// The input hook is not asserted on for content, because what it observes
+    /// depends on what the machine is doing. These check that the calls
+    /// resolve, that a platform can be constructed and disposed without
+    /// leaving a hook installed, and that the engine's interface is satisfied.
+    /// Nothing here injects input, so running the suite does not disturb a
+    /// live desktop.
     /// </summary>
     public sealed class PlatformTests
     {
@@ -24,6 +25,7 @@ namespace TabCycler.Tests
             IntPtr fg = p.GetForegroundWindow();
             Assert.True(fg == IntPtr.Zero || fg != IntPtr.Zero,
                 "any value is fine; the point is that the call did not throw");
+            p.Dispose();
         }
 
         [Test("IsTerminalWindow rejects a zero handle without throwing")]
@@ -31,42 +33,56 @@ namespace TabCycler.Tests
         {
             Win32Platform p = new Win32Platform();
             Assert.False(p.IsTerminalWindow(IntPtr.Zero), "a zero handle is never the terminal");
+            p.Dispose();
         }
 
         [Test("IsTerminalWindow does not throw on a real handle")]
         public void IsTerminalWindowSurvivesRealHandle()
         {
             Win32Platform p = new Win32Platform();
-            // Whatever is in front, this must return rather than throw, even if
-            // the owning process has already exited.
             bool result = p.IsTerminalWindow(p.GetForegroundWindow());
             Assert.True(result || !result, "any value is fine; it must not throw");
+            p.Dispose();
         }
 
-        [Test("LastInputStamp resolves")]
-        public void LastInputStampResolves()
+        [Test("input observation resolves and reports its own fidelity")]
+        public void InputObservationResolves()
         {
-            Win32Platform p = new Win32Platform();
-            uint stamp = p.LastInputStamp();
-            // On a machine that has been up a while this is a large tick count.
-            // Zero is what a failed call returns, so treat it as acceptable but
-            // do assert the call completed.
-            Assert.True(stamp >= 0, "the call completed without throwing");
+            using (Win32Platform p = new Win32Platform())
+            {
+                System.Collections.Generic.List<InputEvent> events = p.DrainInput();
+                Assert.True(events != null, "draining must always return a list, never null");
+                Console.WriteLine("      (hook installed on this machine: " + p.HasHighFidelityInput + ")");
+            }
         }
 
-        [Test("CursorPosition resolves")]
-        public void CursorPositionResolves()
+        [Test("discarding pending input is safe")]
+        public void DiscardIsSafe()
+        {
+            using (Win32Platform p = new Win32Platform())
+            {
+                p.DiscardPendingInput();
+                Assert.True(p.DrainInput().Count >= 0, "draining after a discard must not throw");
+            }
+        }
+
+        [Test("disposing twice is safe, so no hook is left behind")]
+        public void DoubleDisposeIsSafe()
         {
             Win32Platform p = new Win32Platform();
-            CursorPos pos = p.CursorPosition();
-            Assert.True(pos.X <= int.MaxValue, "the call completed without throwing");
+            p.Dispose();
+            p.Dispose();
+            Assert.True(true, "the second dispose must not throw or double-unhook");
         }
 
         [Test("the platform satisfies the interface the engine depends on")]
         public void PlatformImplementsInterface()
         {
-            Assert.True(new Win32Platform() is IPlatform,
-                "the engine is only ever handed the interface, so this must hold");
+            using (Win32Platform concrete = new Win32Platform())
+            {
+                IPlatform p = concrete;
+                Assert.True(p != null, "the engine is only ever handed the interface");
+            }
         }
     }
 }
