@@ -30,6 +30,17 @@ namespace TabCycler
         // ApplyDpi for why that is not simply done once in the constructor.
         const int W = 320, H = 82;
 
+        /// <summary>
+        /// One knob for how large the widget looks, independent of the display's
+        /// scale. The authored geometry is 320x82 at 96 DPI with 9pt/8.5pt type,
+        /// which is too small to read comfortably on a 100% panel, where a point
+        /// is only a pixel. 1.4 puts the title at 12.6pt and the body at 11.9pt,
+        /// which is ordinary UI body text. Bumping this scales the box and the
+        /// fonts by the same factor, so the layout stays proportional: 448x115
+        /// at 100%, 672x172 at 150%.
+        /// </summary>
+        const float DesignScale = 1.4f;
+
         readonly Settings _cfg;
         readonly CyclerEngine _engine;
         readonly Timer _tick = new Timer();
@@ -40,6 +51,7 @@ namespace TabCycler
         readonly Button _close = new Button();
 
         float _scale = 1f;
+        uint _lastDpi;
         bool _positioned;
 
         static string LogPath { get { return Path.Combine(Settings.Dir, "tabcycler.log"); } }
@@ -133,47 +145,73 @@ namespace TabCycler
             b.UseVisualStyleBackColor = false;
         }
 
-        int P(int v) { return (int)Math.Round(v * _scale, MidpointRounding.AwayFromZero); }
+        int P(int v) { return (int)Math.Round(v * _scale * DesignScale, MidpointRounding.AwayFromZero); }
 
         /// <summary>
         /// Lays the widget out for the DPI of the monitor it is actually on.
         ///
-        /// This has to run after the window handle exists, because the only
-        /// trustworthy DPI source is GetDpiForWindow. Reading it in the
-        /// constructor produced 96 on a 150% display, and so did
-        /// AutoScaleMode.Dpi, which uses CreateGraphics() internally. The
-        /// symptom was a 320x82 box holding 150%-scaled fonts, so the buttons
-        /// jammed against the edge and the hint text was clipped.
+        /// There are two independent scalings in play and they have to agree or
+        /// the widget looks wrong:
+        ///
+        /// 1. The box and every position are multiplied out here by _scale,
+        ///    because the geometry is authored at 96 DPI.
+        /// 2. The fonts are created in raw points, so WinForms realises them
+        ///    against the handle's own DPI when it paints.
+        ///
+        /// So (1) has to be computed from the same DPI that (2) will use. That
+        /// is why the dpi is a parameter instead of being read here: callers
+        /// that already know the authoritative value (WM_DPICHANGED) pass it
+        /// straight in, and callers that do not (first layout) read it and say
+        /// so in the log, because guessing wrong is what produced the original
+        /// bug. A 320x82 box holding 150% fonts jams the buttons against the
+        /// edge and clips the hint text.
         /// </summary>
-        void ApplyDpi()
+        void ApplyDpi(uint dpi, string source)
         {
-            uint dpi = Native.GetDpiForWindow(Handle);
-            _scale = (dpi > 0 ? dpi : 96u) / 96f;
+            if (dpi == 0) dpi = 96;
+
+            _lastDpi = dpi;
+            _scale = dpi / 96f;
 
             ClientSize = new Size(P(W), P(H));
 
-            _title.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            _title.Font = new Font("Segoe UI", 9f * DesignScale, FontStyle.Bold);
             _title.Location = new Point(P(10), P(8));
             _title.Size = new Size(P(185), P(18));
 
-            _status.Font = new Font("Segoe UI", 8.5f);
+            _status.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _status.Location = new Point(P(10), P(34));
             _status.Size = new Size(P(300), P(17));
 
-            _detail.Font = new Font("Segoe UI", 8.5f);
+            _detail.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _detail.Location = new Point(P(10), P(56));
             _detail.Size = new Size(P(300), P(17));
 
-            _toggle.Font = new Font("Segoe UI", 8.5f);
+            _toggle.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _toggle.Location = new Point(P(202), P(5));
             _toggle.Size = new Size(P(72), P(26));
 
-            _close.Font = new Font("Segoe UI", 8.5f);
+            _close.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _close.Location = new Point(P(280), P(5));
             _close.Size = new Size(P(30), P(26));
 
             Invalidate();
+
+            Log("dpi=" + dpi + " (scale " + _scale.ToString("0.###", CultureInfo.InvariantCulture) +
+                ") box=" + ClientSize.Width + "x" + ClientSize.Height + " via " + source +
+                " at " + Left + "," + Top);
         }
+
+        /// <summary>
+        /// First layout, before the window is known to sit on a particular
+        /// monitor. GetDpiForWindow can answer 96 here even when the widget is
+        /// about to land on a 150% display, which is why OnShown re-checks.
+        /// </summary>
+        void ApplyDpi()
+        {
+            ApplyDpi(Native.GetDpiForWindow(Handle), "GetDpiForWindow");
+        }
+
 
         /// <summary>
         /// Compact description of which inputs count, for the startup log. The
@@ -338,21 +376,50 @@ namespace TabCycler
                 RestorePosition();
             }
 
+            // dpi, box size and position are logged by ApplyDpi, which owns
+            // them. They are deliberately not repeated here: at this point the
+            // window has only just been placed, so the DPI here can still be
+            // the pre-move guess that OnShown corrects.
             Log("started: interval=" + _cfg.IntervalSeconds + "s resumeDelay=" +
                 _cfg.ResumeDelaySeconds + "s moveThreshold=" + _cfg.MoveThresholdPixels +
-                "px input=[" + DescribeInput() + "] dpi=" + (int)(_scale * 96) + " size=" + P(W) + "x" + P(H) +
-                " at " + Left + "," + Top);
+                "px input=[" + DescribeInput() + "]");
         }
 
         /// <summary>
-        /// Re-lay out when the window lands on a monitor with a different scale.
-        /// Without this the widget keeps the box size of whichever monitor it
-        /// started on, which squashes the text on the other one.
+        /// A top-level form moving between monitors is told about the new scale
+        /// through WM_DPICHANGED, not through OnDpiChangedAfterParent (that one
+        /// is for a child whose parent changed, so it never fired here and
+        /// dragging the widget between the 150% display and the 100% panel
+        /// resized nothing).
+        ///
+        /// LOWORD(wParam) is the new DPI and is authoritative. The base call
+        /// runs first so WinForms has updated its own bookkeeping before the
+        /// layout is recomputed from the same value. The suggested rectangle in
+        /// lParam is deliberately not applied: the widget owns its own
+        /// position, and honouring it would fight the drag handler.
         /// </summary>
-        protected override void OnDpiChangedAfterParent(EventArgs e)
+        protected override void WndProc(ref Message m)
         {
-            base.OnDpiChangedAfterParent(e);
-            ApplyDpi();
+            if (m.Msg == Native.WM_DPICHANGED)
+            {
+                uint dpi = (uint)(m.WParam.ToInt64() & 0xFFFF);
+                base.WndProc(ref m);
+                ApplyDpi(dpi, "WM_DPICHANGED");
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        /// <summary>
+        /// Re-read the DPI once the window is actually on screen. The first
+        /// layout happens before RestorePosition has moved the widget, so it
+        /// can be sized for a monitor the widget is not on. This is the check
+        /// that makes the initial position come out right in both directions.
+        /// </summary>
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyDpi(Native.GetDpiForWindow(Handle), "shown");
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -367,6 +434,7 @@ namespace TabCycler
     {
         internal const int WM_NCLBUTTONDOWN = 0x00A1;
         internal const int HTCAPTION = 0x0002;
+        internal const int WM_DPICHANGED = 0x02E0;
 
         [DllImport("user32.dll")]
         internal static extern uint GetDpiForWindow(IntPtr hwnd);
