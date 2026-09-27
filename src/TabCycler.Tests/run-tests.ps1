@@ -25,6 +25,8 @@ if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
 # cleanly and only fails at call time.
 $sources = @(
     (Join-Path $PSScriptRoot '..\TabCycler\WatchState.cs')
+    (Join-Path $PSScriptRoot '..\TabCycler\InputKind.cs')
+    (Join-Path $PSScriptRoot '..\TabCycler\InputOptions.cs')
     (Join-Path $PSScriptRoot '..\TabCycler\IPlatform.cs')
     (Join-Path $PSScriptRoot '..\TabCycler\CyclerEngine.cs')
     (Join-Path $PSScriptRoot '..\TabCycler\Win32Platform.cs')

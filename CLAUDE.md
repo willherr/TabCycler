@@ -20,7 +20,7 @@ Because this is public now, two things are no longer private thinking:
 # Build the exe
 pwsh -NoProfile -File .\src\TabCycler\build.ps1
 
-# Run the tests (33 of them, no desktop needed)
+# Run the tests (52 of them, no desktop needed)
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```

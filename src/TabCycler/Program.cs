@@ -10,7 +10,12 @@ namespace TabCycler
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new CyclerForm(new Win32Platform()));
+            // The platform owns the low-level keyboard and mouse hooks, so it has
+            // to be disposed rather than left to process teardown.
+            using (var platform = new Win32Platform())
+            {
+                Application.Run(new CyclerForm(platform));
+            }
         }
     }
 }

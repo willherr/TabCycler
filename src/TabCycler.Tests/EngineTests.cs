@@ -29,6 +29,46 @@ namespace TabCycler.Tests
             _e.Log = _log.Add;
         }
 
+        /// <summary>Setup with non-default input options.</summary>
+        void SetupWith(InputOptions options)
+        {
+            _p = new FakePlatform();
+            _log = new LogSink();
+            _e = new CyclerEngine(_p, Interval, Hold, T0,
+                                 CyclerEngine.DefaultMoveThresholdPixels, options);
+            _e.Log = _log.Add;
+        }
+
+        static InputOptions OptionsOff(params string[] kinds)
+        {
+            InputOptions o = InputOptions.Default;
+            foreach (string k in kinds)
+            {
+                if (k == "key") o.ResetOnKeyPress = false;
+                if (k == "click") o.ResetOnClick = false;
+                if (k == "scroll") o.ResetOnScroll = false;
+                if (k == "movement") o.ResetOnMovement = false;
+            }
+            return o;
+        }
+
+        /// <summary>
+        /// Drives the engine into Cycling, then fires one input of the given
+        /// kind and reports whether the hold was re-armed.
+        /// </summary>
+        bool ArmsOn(Action fire)
+        {
+            SetupWith(_options);
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            if (_e.State != WatchState.Cycling) return false;   // precondition failed
+            fire();
+            _e.Tick(T0.AddSeconds(6));
+            return _e.State == WatchState.Holding;
+        }
+
+        InputOptions _options = InputOptions.Default;
+
         /// <summary>Poll the engine repeatedly, as the 250ms timer would.</summary>
         void Poll(DateTime start, int seconds, int stepMs = 250)
         {
@@ -565,6 +605,125 @@ namespace TabCycler.Tests
             Assert.Equal("Idle", _e.StatusText, "says it is idle");
             Assert.Equal("focus Windows Terminal to start", _e.DetailText, "and what would start it");
             Assert.True(_e.ButtonIsHighlighted, "Start is the highlighted action when not cycling");
+        }
+
+        // ---- per-kind input filtering, which the hook makes possible --------
+
+        [Test("each input kind stops the cycling by default")]
+        public void EveryKindStopsByDefault()
+        {
+            Assert.True(ArmsOn(() => _p.TypeKey()), "typing stops it");
+            Assert.True(ArmsOn(() => _p.Click()), "clicking stops it");
+            Assert.True(ArmsOn(() => _p.ScrollWheel()), "scrolling stops it");
+            Assert.True(ArmsOn(() => _p.Sweep(120, 0, 12)), "moving the pointer stops it");
+        }
+
+        [Test("typing can be switched off without affecting the others")]
+        public void TypingCanBeDisabled()
+        {
+            _options = OptionsOff("key");
+            Assert.False(ArmsOn(() => _p.TypeKey()), "typing must be ignored");
+            Assert.True(ArmsOn(() => _p.Click()), "clicking still counts");
+            Assert.True(ArmsOn(() => _p.ScrollWheel()), "scrolling still counts");
+        }
+
+        [Test("clicking can be switched off without affecting the others")]
+        public void ClickingCanBeDisabled()
+        {
+            _options = OptionsOff("click");
+            Assert.False(ArmsOn(() => _p.Click()), "clicking must be ignored");
+            Assert.True(ArmsOn(() => _p.TypeKey()), "typing still counts");
+        }
+
+        [Test("scrolling can be switched off without affecting the others")]
+        public void ScrollingCanBeDisabled()
+        {
+            _options = OptionsOff("scroll");
+            Assert.False(ArmsOn(() => _p.ScrollWheel()), "scrolling must be ignored");
+            Assert.True(ArmsOn(() => _p.TypeKey()), "typing still counts");
+        }
+
+        [Test("movement can be switched off without affecting the others")]
+        public void MovementCanBeDisabled()
+        {
+            _options = OptionsOff("movement");
+            Assert.False(ArmsOn(() => _p.Sweep(120, 0, 12)), "movement must be ignored");
+            Assert.True(ArmsOn(() => _p.TypeKey()), "typing still counts");
+        }
+
+        [Test("all four can be switched off, leaving input to never hold")]
+        public void EverythingCanBeDisabled()
+        {
+            _options = OptionsOff("key", "click", "scroll", "movement");
+            Assert.False(ArmsOn(() => _p.TypeKey()), "typing ignored");
+            Assert.False(ArmsOn(() => _p.Click()), "clicking ignored");
+            Assert.False(ArmsOn(() => _p.ScrollWheel()), "scrolling ignored");
+            Assert.False(ArmsOn(() => _p.Sweep(120, 0, 12)), "movement ignored");
+        }
+
+        // ---- synthetic input, the reason the hook exists ---------------------
+
+        [Test("input injected by another process is ignored by default")]
+        public void InjectedInputIsIgnoredByDefault()
+        {
+            // This is issue #7. A browser-automation agent driving the real
+            // mouse must not read as the user, or the hold never expires.
+            _options = InputOptions.Default;
+            Assert.False(ArmsOn(() => _p.InjectedKey()), "an injected keystroke must not arm it");
+            Assert.False(ArmsOn(() => _p.InjectedMovement(200, 200)), "nor injected movement");
+        }
+
+        [Test("injected input can be made to count, for anyone who wants that")]
+        public void InjectedInputCanBeCounted()
+        {
+            _options = InputOptions.Default;
+            _options.IgnoreInjected = false;
+            Assert.True(ArmsOn(() => _p.InjectedKey()),
+                "with the option off, a synthetic keystroke counts like any other");
+        }
+
+        [Test("real input still counts while injected input is ignored")]
+        public void RealInputStillCountsWithIgnoreInjected()
+        {
+            _options = InputOptions.Default;   // IgnoreInjected = true
+            Assert.True(ArmsOn(() => _p.TypeKey()), "real typing must still arm it");
+        }
+
+        [Test("an unclassified event counts if any of the three it could be is enabled")]
+        public void UnclassifiedRespectsAnyEnabled()
+        {
+            // The fallback path when no hook is available can only say "one of
+            // these three happened". Arming on any enabled one is the honest
+            // reading, and it must not arm when all three are off.
+            SetupWith(OptionsOff("key"));
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+            _p.PushUnclassified();
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Same(WatchState.Holding, _e.State,
+                "clicking is still enabled, so an unclassified event should arm it");
+
+            SetupWith(OptionsOff("key", "click", "scroll"));
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            _p.PushUnclassified();
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Same(WatchState.Cycling, _e.State,
+                "with all three off, an unclassified event must not arm it");
+        }
+
+        [Test("InputOptions equality and defaults are sane")]
+        public void InputOptionsDefaultsAndEquality()
+        {
+            Assert.Equal(InputOptions.Default, InputOptions.Default, "default compares equal");
+            InputOptions off = InputOptions.Default;
+            off.ResetOnKeyPress = false;
+            Assert.False(InputOptions.Default.Equals(off), "a changed flag is a different value");
+            Assert.True(InputOptions.Default.IgnoreInjected,
+                "synthetic input is ignored out of the box, which is issue #7's fix");
+            Assert.True(InputOptions.Default.ArmsFor(InputKind.Unclassified),
+                "unclassified arms when any of its three candidates is enabled");
         }
     }
 }

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 namespace TabCycler
@@ -48,7 +49,8 @@ namespace TabCycler
             _cfg = new Settings();
 
             _engine = new CyclerEngine(platform, _cfg.IntervalSeconds, _cfg.ResumeDelaySeconds,
-                                       DateTime.Now, _cfg.MoveThresholdPixels)
+                                       DateTime.Now, _cfg.MoveThresholdPixels,
+                                       _cfg.ToInputOptions())
             {
                 Log = Log
             };
@@ -171,6 +173,23 @@ namespace TabCycler
             _close.Size = new Size(P(30), P(26));
 
             Invalidate();
+        }
+
+        /// <summary>
+        /// Compact description of which inputs count, for the startup log. The
+        /// log is the only way to tell what the widget is actually doing when
+        /// the UI is too small to read.
+        /// </summary>
+        string DescribeInput()
+        {
+            StringBuilder sb = new StringBuilder();
+            if (_cfg.ResetOnKeyPress) sb.Append("key,");
+            if (_cfg.ResetOnClick) sb.Append("click,");
+            if (_cfg.ResetOnScroll) sb.Append("scroll,");
+            if (_cfg.ResetOnMovement) sb.Append("move,");
+            if (_cfg.IgnoreInjected) sb.Append("skipInjected");
+            string s = sb.ToString();
+            return s.Length == 0 ? "none" : s.TrimEnd(',');
         }
 
         void OnPoll()
@@ -321,7 +340,7 @@ namespace TabCycler
 
             Log("started: interval=" + _cfg.IntervalSeconds + "s resumeDelay=" +
                 _cfg.ResumeDelaySeconds + "s moveThreshold=" + _cfg.MoveThresholdPixels +
-                "px dpi=" + (int)(_scale * 96) + " size=" + P(W) + "x" + P(H) +
+                "px input=[" + DescribeInput() + "] dpi=" + (int)(_scale * 96) + " size=" + P(W) + "x" + P(H) +
                 " at " + Left + "," + Top);
         }
 
