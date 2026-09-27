@@ -3,14 +3,19 @@
 A small always-on-top widget that rotates the active Windows Terminal tab on an
 interval, so you can watch several agents work without clicking through tabs.
 
+![The TabCycler widget, showing that it is idle until Windows Terminal is focused](docs/widget.png)
+
 <!-- Status: private while it is being vetted. See the open issues. -->
 
 ## What it does
 
 - Switches to the next tab every 5 seconds while Windows Terminal is in front
-- The moment you type or click, it stops and holds for 60 seconds
-- Every further keystroke or click pushes that 60 seconds out again
-- Moving the mouse does not count, so you can still gesture at things
+- The moment you type, click, scroll or move the mouse, it stops and holds for
+  60 seconds
+- Every further keystroke, click, scroll or deliberate mouse movement pushes
+  that 60 seconds out again
+- Jitter under 8px per poll is ignored, so a resting hand cannot hold it off
+  forever
 - A **Start** button skips the wait, and waits a full interval before the first
   switch so the tab you just chose stays readable
 - **X** quits
@@ -18,6 +23,38 @@ interval, so you can watch several agents work without clicking through tabs.
 The button is contextual: it reads **Pause** while cycling and **Start** in any
 other state, and its label is derived from the same value the click handler
 reads, so it can never promise something the press does not do.
+
+## Adding images to a README
+
+GitHub renders images in Markdown with a relative path, so put the file in the
+repo and point at it:
+
+```markdown
+![Alt text describing the image](docs/widget.png)
+```
+
+The text in the square brackets is the alt text, which is what screen readers
+announce and what shows if the image fails to load. Write it as a description
+of the content, not "image" or "screenshot". Above is the one in this file.
+
+To control the rendered size, use HTML instead, which GitHub also allows:
+
+```html
+<img src="docs/widget.png" width="480" alt="Alt text describing the image">
+```
+
+Details worth knowing:
+
+- Paths are relative to the repository root, not to the README, so a README in
+  a subfolder needs `../docs/widget.png`
+- Never use an absolute URL to your own machine, it will be broken for everyone
+  else and it leaks a local path
+- A screen capture usually wants to be cropped to the widget before committing,
+  both to keep the file small and to avoid capturing whatever was behind it
+- An animated `.gif` works the same way if you want to show a sequence
+- To reference an issue, `#1` links to it
+- Set the width to roughly the widget's real pixel size. Scaling it up just
+  makes the text blurry
 
 ## Build
 

@@ -259,10 +259,17 @@ namespace TabCycler
 
             bool pointerHeldStill = (dx == 0 && dy == 0);
             bool movedDeliberately = (dx >= _moveThreshold || dy >= _moveThreshold);
-            if (!pointerHeldStill && !movedDeliberately) return false;
+            if (!pointerHeldStill && !movedDeliberately)
+            {
+                Write("input ignored: moved " + dx + "x" + dy + "px, below the " +
+                      _moveThreshold + "px threshold");
+                return false;
+            }
 
             _resumeAt = now.AddSeconds(_hold);
-            Write("input -> holding " + _hold + "s");
+            Write("input -> holding " + _hold + "s (" +
+                  (pointerHeldStill ? "key/click/scroll" : "moved " + dx + "x" + dy + "px") +
+                  ", stamp " + stamp + ")");
             return true;
         }
 
