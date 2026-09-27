@@ -20,7 +20,7 @@ Because this is public now, two things are no longer private thinking:
 # Build the exe
 pwsh -NoProfile -File .\src\TabCycler\build.ps1
 
-# Run the tests (52 of them, no desktop needed)
+# Run the tests (71 of them, no desktop needed)
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```
@@ -109,9 +109,9 @@ Two independent scalings are in play and they must agree or the layout is wrong:
 2. The fonts are created in **raw points**, so WinForms realises them against
    the handle's own DPI when it paints.
 
-So (1) must be computed from the same DPI that (2) will use. `ApplyDpi` takes
-the DPI as a parameter for exactly this reason, and each caller says where its
-value came from in the log:
+So (1) must be computed from the same DPI that (2) will use. That is why the
+DPI is passed in rather than re-read at layout time, and the place that owns
+the rule is `DpiAwareForm`, not a per-form copy:
 
 - `WM_DPICHANGED` (`LOWORD(wParam)`) is authoritative and is the only thing that
   fires on a move between monitors. It runs `base.WndProc` first so WinForms
@@ -121,6 +121,12 @@ value came from in the log:
   at that point can describe a monitor the widget is not on.
 - `GetDpiForWindow` is only the first guess at handle creation.
 
+Both `CyclerForm` and `SettingsDialog` derive from `DpiAwareForm` and implement
+`OnDpiScaled`. That is deliberate: this trigger was written once for the widget,
+got the wrong override, and a copy pasted into the settings dialog would have
+carried the same defect. Add a third window by deriving from the base, not by
+copying the `WndProc`.
+
 Do not re-introduce `OnDpiChangedAfterParent` for this. That is the child-control
 hook (a child's parent changed DPI), so for a top-level `Form` it never fired and
 dragging between monitors resized nothing at all. That was the actual defect.
@@ -128,6 +134,12 @@ dragging between monitors resized nothing at all. That was the actual defect.
 Keep `AutoScaleMode = None` and do not move any of this into the constructor.
 `CreateGraphics()` reports 96 on this machine regardless of the real scale, so
 WinForms' own autoscaling silently declines to scale.
+
+The widget additionally multiplies everything by `DesignScale` (1.4), because
+9pt type is too small to read on a 100% panel where a point is only a pixel. That
+is a legibility choice, not a DPI correction, and it is one constant. The
+dialog has no such multiplier: it is an ordinary window and 9pt is ordinary
+there.
 
 Verify a change by moving the window with `SetWindowPos` across the monitor
 boundary and reading the `dpi=` lines. `SetWindowPos` does not touch the mouse
@@ -177,10 +189,45 @@ each input kind can be armed or disarmed individually.
 
 ## Settings and logs
 
-- `%LOCALAPPDATA%\TabCycler\settings.txt`: interval, resume delay, window
-  position. Read at launch, so timing changes need no rebuild.
+- `%LOCALAPPDATA%\TabCycler\settings.txt`: interval, resume delay, movement
+  threshold, the four input toggles, `IgnoreInjected`, and window position.
+  Edited from the gear button on the widget, and still hand-editable: the parse
+  is lenient and keeps defaults for anything it cannot read. **Use
+  `Settings.Defaults()` in tests, never `new Settings()`**, because the public
+  constructor reads the real file and a test using it would inherit whatever the
+  widget last saved. `LoadFrom(TextReader)` and `Serialize()` are the seam that
+  keeps the tests off the disk.
 - `%LOCALAPPDATA%\TabCycler\tabcycler.log`: timestamped state transitions,
-  rotated at 1 MB. This is the first place to look when behaviour is odd.
+  settings applications and DPI changes, rotated at 1 MB. This is the first
+  place to look when behaviour is odd.
+
+## The settings dialog
+
+The gear on the widget opens `SettingsDialog`. It edits a copy and is seeded
+from the **engine**, not from the settings file, so it can never open showing
+something other than what is actually running. Cancel writes nothing.
+
+Applying is live: `CyclerEngine.ApplySettings` takes the new values with the
+same validation as the constructor, and the widget reschedules the tick period
+to match. A rejected value is logged and the file is left alone, so the file
+and the running state cannot end up disagreeing.
+
+A timing change reschedules the pending wait **from now**, rather than keeping
+the old phase. Preserving the phase would mean changing 5s to 60s could fire
+*sooner* than the new interval promises, which is the opposite of what was
+asked for.
+
+The hint line under the status is built from whatever is actually enabled, so
+it cannot claim movement re-arms the hold when movement is switched off. With
+everything off it says so rather than showing an empty list.
+
+## Colours
+
+`Palette.cs` holds them, because the dialog has to match the widget and a
+second copy of the hex values would drift. Every pair there is contrast-checked,
+not eyeballed. The one that was not: the border used to be `#444444`, which is
+1.69:1 against the `#1F1F1F` background and therefore fails the 3:1 a non-text
+boundary needs. It is `#707070` now, 3.33:1.
 
 ## Verification scripts
 
@@ -189,3 +236,9 @@ They are kept because they were useful, but they are **not** part of CI and
 several of them produced misleading results during development. Do not treat a
 pass from one of them as evidence, and do not add to them expecting them to be
 dependable. The unit tests are the source of truth.
+
+To exercise the real UI without disturbing anything, post window messages
+rather than moving the mouse: `BM_CLICK` to a button's handle opens the dialog
+and ticks a checkbox, and unlike synthetic input it does not trip the
+low-level hook in `Win32Platform`, which would otherwise re-arm the hold and
+make the test lie to you.

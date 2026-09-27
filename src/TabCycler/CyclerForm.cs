@@ -4,7 +4,6 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Forms;
 
 namespace TabCycler
@@ -14,21 +13,14 @@ namespace TabCycler
     /// reports and forwards clicks and ticks to it. All the decisions live in
     /// the engine, which is why they can be tested without a window.
     /// </summary>
-    internal sealed class CyclerForm : Form
+    internal sealed class CyclerForm : DpiAwareForm
     {
-        // ---- palette -------------------------------------------------------
-        static readonly Color Back = Color.FromArgb(0x1F, 0x1F, 0x1F);
-        static readonly Color Edge = Color.FromArgb(0x44, 0x44, 0x44);
-        static readonly Color Title = Color.FromArgb(0xEC, 0xEC, 0xEC);
-        static readonly Color Body = Color.FromArgb(0xA6, 0xA6, 0xA6);
-        static readonly Color BtnFace = Color.FromArgb(0x33, 0x33, 0x33);
-        static readonly Color BtnHover = Color.FromArgb(0x44, 0x44, 0x44);
-        static readonly Color StartFace = Color.FromArgb(0x4A, 0x4A, 0x4A);
-        static readonly Color Danger = Color.FromArgb(0xC4, 0x2B, 0x1C);
+        // Colours live in Palette, so the settings dialog matches the widget
+        // without a second copy of the hex values to drift out of step.
 
         // Geometry is authored at 96 DPI and multiplied out at runtime. See
-        // ApplyDpi for why that is not simply done once in the constructor.
-        const int W = 320, H = 82;
+        // OnDpiScaled for why that is not simply done once in the constructor.
+        const int W = 384, H = 82;
 
         /// <summary>
         /// One knob for how large the widget looks, independent of the display's
@@ -48,10 +40,9 @@ namespace TabCycler
         readonly Label _status = new Label();
         readonly Label _detail = new Label();
         readonly Button _toggle = new Button();
+        readonly Button _gear = new Button();
         readonly Button _close = new Button();
 
-        float _scale = 1f;
-        uint _lastDpi;
         bool _positioned;
 
         static string LogPath { get { return Path.Combine(Settings.Dir, "tabcycler.log"); } }
@@ -71,43 +62,57 @@ namespace TabCycler
             Text = "Tab Cycler";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Back;
-            ForeColor = Body;
+            BackColor = Palette.Back;
+            ForeColor = Palette.Body;
             TopMost = true;                 // stay above the terminal and everything else
             ShowInTaskbar = true;           // own taskbar button, pinnable
             MinimizeBox = false;
             MaximizeBox = false;
             // Deliberately None. WinForms' own DPI autoscaling reads the DPI via
             // CreateGraphics(), which reports 96 on a 150% display, so it
-            // silently declines to scale. ApplyDpi does it properly instead.
+            // silently declines to scale. DpiAwareForm does it properly instead.
             AutoScaleMode = AutoScaleMode.None;
 
             _title.Text = "Tab Cycler";
-            _title.ForeColor = Title;
+            _title.ForeColor = Palette.Title;
             _title.BackColor = Color.Transparent;
             _title.TextAlign = ContentAlignment.MiddleLeft;
 
-            _status.ForeColor = Body;
+            _status.ForeColor = Palette.Body;
             _status.BackColor = Color.Transparent;
             _status.TextAlign = ContentAlignment.MiddleLeft;
 
-            _detail.ForeColor = Color.FromArgb(0x7A, 0x7A, 0x7A);
+            _detail.ForeColor = Palette.Hint;
             _detail.BackColor = Color.Transparent;
             _detail.TextAlign = ContentAlignment.MiddleLeft;
 
             ConfigureButton(_toggle);
+            ConfigureButton(_gear);
             ConfigureButton(_close);
+            // The gear is drawn rather than typed. A literal U+2699 in the
+            // source is a gamble: csc reads this file as UTF-8 only when it has
+            // a BOM, and without one the glyph can arrive mangled, which is
+            // exactly the kind of thing that only shows up on someone else's
+            // build. Painting it also keeps it crisp at 100% and 150%.
+            _gear.Text = "";
+            _gear.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                OnGearPaint(e.Graphics);
+            };
             _close.Text = "X";
-            _close.ForeColor = Color.FromArgb(0xC9, 0xC9, 0xC9);
-            _close.MouseEnter += delegate { _close.BackColor = Danger; _close.ForeColor = Color.White; };
-            _close.MouseLeave += delegate { _close.BackColor = BtnFace; _close.ForeColor = Color.FromArgb(0xC9, 0xC9, 0xC9); };
-            _toggle.MouseEnter += delegate { if (_toggle.BackColor == BtnFace) _toggle.BackColor = BtnHover; };
-            _toggle.MouseLeave += delegate { if (_toggle.BackColor == BtnFace) _toggle.BackColor = BtnFace; };
+            _close.ForeColor = Palette.CloseLabel;
+            _close.MouseEnter += delegate { _close.BackColor = Palette.Danger; _close.ForeColor = Color.White; };
+            _close.MouseLeave += delegate { _close.BackColor = Palette.BtnFace; _close.ForeColor = Palette.CloseLabel; };
+            _toggle.MouseEnter += delegate { if (_toggle.BackColor == Palette.BtnFace) _toggle.BackColor = Palette.BtnHover; };
+            _toggle.MouseLeave += delegate { if (_toggle.BackColor == Palette.BtnFace) _toggle.BackColor = Palette.BtnFace; };
+            _gear.MouseEnter += delegate { if (_gear.BackColor == Palette.BtnFace) _gear.BackColor = Palette.BtnHover; };
+            _gear.MouseLeave += delegate { if (_gear.BackColor == Palette.BtnFace) _gear.BackColor = Palette.BtnFace; };
 
             _toggle.Click += delegate { OnToggleClick(); };
+            _gear.Click += delegate { OnSettingsClick(); };
             _close.Click += delegate { CloseAndExit(); };
 
-            Controls.AddRange(new Control[] { _title, _status, _detail, _toggle, _close });
+            Controls.AddRange(new Control[] { _title, _status, _detail, _toggle, _gear, _close });
             ResumeLayout(true);
 
             // Drag anywhere on the (non-button) body to move the widget.
@@ -137,15 +142,48 @@ namespace TabCycler
 
         void ConfigureButton(Button b)
         {
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderSize = 0;
-            b.FlatAppearance.MouseOverBackColor = BtnHover;
-            b.BackColor = BtnFace;
-            b.ForeColor = Color.FromArgb(0xDE, 0xDE, 0xDE);
-            b.UseVisualStyleBackColor = false;
+            Palette.StyleButton(b);
         }
 
-        int P(int v) { return (int)Math.Round(v * _scale * DesignScale, MidpointRounding.AwayFromZero); }
+        int P(int v) { return P96((int)Math.Round(v * DesignScale, MidpointRounding.AwayFromZero)); }
+
+        /// <summary>
+        /// Draws the settings gear: a ring, a hub, and teeth around it. Sized
+        /// from the button so it lands the same way on both displays.
+        /// </summary>
+        void OnGearPaint(Graphics g)
+        {
+            using (Pen p = new Pen(Palette.BtnLabel))
+            using (SolidBrush b = new SolidBrush(Palette.BtnLabel))
+            {
+                float d = Math.Min(_gear.Width, _gear.Height) * 0.52f;
+                float cx = _gear.Width / 2f, cy = _gear.Height / 2f;
+                float r = d / 2f;
+
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.DrawEllipse(p, cx - r, cy - r, d, d);
+
+                float hub = d * 0.34f;
+                g.FillEllipse(b, cx - hub / 2f, cy - hub / 2f, hub, hub);
+
+                // Six teeth, as short thick spokes just outside the ring.
+                const int Teeth = 6;
+                for (int i = 0; i < Teeth; i++)
+                {
+                    double a = (Math.PI * 2 * i / Teeth) - Math.PI / 2;
+                    float inner = r * 0.82f;
+                    float outer = r * 1.34f;
+                    float x1 = cx + (float)Math.Cos(a) * inner;
+                    float y1 = cy + (float)Math.Sin(a) * inner;
+                    float x2 = cx + (float)Math.Cos(a) * outer;
+                    float y2 = cy + (float)Math.Sin(a) * outer;
+                    float tw = d * 0.15f;
+                    g.DrawLine(p, x1, y1, x2, y2);
+                    using (SolidBrush t = new SolidBrush(Palette.BtnLabel))
+                        g.FillEllipse(t, x2 - tw / 2f, y2 - tw / 2f, tw, tw);
+                }
+            }
+        }
 
         /// <summary>
         /// Lays the widget out for the DPI of the monitor it is actually on.
@@ -153,82 +191,63 @@ namespace TabCycler
         /// There are two independent scalings in play and they have to agree or
         /// the widget looks wrong:
         ///
-        /// 1. The box and every position are multiplied out here by _scale,
+        /// 1. The box and every position are multiplied out here by the scale,
         ///    because the geometry is authored at 96 DPI.
         /// 2. The fonts are created in raw points, so WinForms realises them
         ///    against the handle's own DPI when it paints.
         ///
-        /// So (1) has to be computed from the same DPI that (2) will use. That
-        /// is why the dpi is a parameter instead of being read here: callers
-        /// that already know the authoritative value (WM_DPICHANGED) pass it
-        /// straight in, and callers that do not (first layout) read it and say
-        /// so in the log, because guessing wrong is what produced the original
-        /// bug. A 320x82 box holding 150% fonts jams the buttons against the
-        /// edge and clips the hint text.
+        /// So (1) has to be computed from the same DPI that (2) will use, which
+        /// is why the base class passes the dpi in rather than letting this
+        /// method read it again. A 320x82 box holding 150% fonts jams the
+        /// buttons against the edge and clips the hint text.
+        ///
+        /// The font point sizes are multiplied by <see cref="DesignScale"/>
+        /// because that knob is a deliberate legibility choice, not a DPI
+        /// correction, and the geometry goes through P() which applies it too.
         /// </summary>
-        void ApplyDpi(uint dpi, string source)
+        protected override void OnDpiScaled(uint dpi, float scale, string source)
         {
-            if (dpi == 0) dpi = 96;
-
-            _lastDpi = dpi;
-            _scale = dpi / 96f;
-
             ClientSize = new Size(P(W), P(H));
 
             _title.Font = new Font("Segoe UI", 9f * DesignScale, FontStyle.Bold);
             _title.Location = new Point(P(10), P(8));
-            _title.Size = new Size(P(185), P(18));
+            _title.Size = new Size(P(228), P(18));
 
             _status.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _status.Location = new Point(P(10), P(34));
-            _status.Size = new Size(P(300), P(17));
+            _status.Size = new Size(P(340), P(17));
 
             _detail.Font = new Font("Segoe UI", 8.5f * DesignScale);
             _detail.Location = new Point(P(10), P(56));
-            _detail.Size = new Size(P(300), P(17));
+            _detail.Size = new Size(P(340), P(17));
 
             _toggle.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _toggle.Location = new Point(P(202), P(5));
-            _toggle.Size = new Size(P(72), P(26));
+            _toggle.Location = new Point(P(245), P(5));
+            _toggle.Size = new Size(P(66), P(26));
+
+            _gear.Font = new Font("Segoe UI", 11f * DesignScale);
+            _gear.Location = new Point(P(315), P(5));
+            _gear.Size = new Size(P(30), P(26));
 
             _close.Font = new Font("Segoe UI", 8.5f * DesignScale);
-            _close.Location = new Point(P(280), P(5));
+            _close.Location = new Point(P(349), P(5));
             _close.Size = new Size(P(30), P(26));
 
             Invalidate();
+        }
 
-            Log("dpi=" + dpi + " (scale " + _scale.ToString("0.###", CultureInfo.InvariantCulture) +
-                ") box=" + ClientSize.Width + "x" + ClientSize.Height + " via " + source +
+        /// <summary>Override point for the base class's DPI log line.</summary>
+        protected override void LogDpi(string message)
+        {
+            Log(message + " box=" + ClientSize.Width + "x" + ClientSize.Height +
                 " at " + Left + "," + Top);
         }
 
         /// <summary>
-        /// First layout, before the window is known to sit on a particular
-        /// monitor. GetDpiForWindow can answer 96 here even when the widget is
-        /// about to land on a 150% display, which is why OnShown re-checks.
+        /// The input summary for the startup log, delegated to the engine so
+        /// there is one definition of the string.
         /// </summary>
-        void ApplyDpi()
-        {
-            ApplyDpi(Native.GetDpiForWindow(Handle), "GetDpiForWindow");
-        }
-
-
-        /// <summary>
-        /// Compact description of which inputs count, for the startup log. The
-        /// log is the only way to tell what the widget is actually doing when
-        /// the UI is too small to read.
-        /// </summary>
-        string DescribeInput()
-        {
-            StringBuilder sb = new StringBuilder();
-            if (_cfg.ResetOnKeyPress) sb.Append("key,");
-            if (_cfg.ResetOnClick) sb.Append("click,");
-            if (_cfg.ResetOnScroll) sb.Append("scroll,");
-            if (_cfg.ResetOnMovement) sb.Append("move,");
-            if (_cfg.IgnoreInjected) sb.Append("skipInjected");
-            string s = sb.ToString();
-            return s.Length == 0 ? "none" : s.TrimEnd(',');
-        }
+        string DescribeInput() { return CyclerEngine.DescribeInput(_engine.Input); }
 
         void OnPoll()
         {
@@ -250,7 +269,7 @@ namespace TabCycler
             if (_toggle.Text != label)
             {
                 _toggle.Text = label;
-                _toggle.BackColor = _engine.ButtonIsHighlighted ? StartFace : BtnFace;
+                _toggle.BackColor = _engine.ButtonIsHighlighted ? Palette.StartFace : Palette.BtnFace;
                 _toggle.ForeColor = _engine.ButtonIsHighlighted
                     ? Color.White : Color.FromArgb(0xDE, 0xDE, 0xDE);
             }
@@ -364,10 +383,11 @@ namespace TabCycler
 
         protected override void OnHandleCreated(EventArgs e)
         {
+            // The base class lays the window out for the current DPI before
+            // this runs, so the size is already right for RestorePosition to
+            // clamp against.
             base.OnHandleCreated(e);
             _engine.WidgetHandle = Handle;
-
-            ApplyDpi();
 
             // Only place the window once, after its real size is known.
             if (!_positioned)
@@ -376,56 +396,89 @@ namespace TabCycler
                 RestorePosition();
             }
 
-            // dpi, box size and position are logged by ApplyDpi, which owns
-            // them. They are deliberately not repeated here: at this point the
-            // window has only just been placed, so the DPI here can still be
-            // the pre-move guess that OnShown corrects.
+            // dpi, box size and position are logged by the base class, which
+            // owns them. They are deliberately not repeated here: at this point
+            // the window has only just been placed, so the DPI can still be the
+            // pre-move guess that OnShown corrects.
             Log("started: interval=" + _cfg.IntervalSeconds + "s resumeDelay=" +
                 _cfg.ResumeDelaySeconds + "s moveThreshold=" + _cfg.MoveThresholdPixels +
                 "px input=[" + DescribeInput() + "]");
         }
 
         /// <summary>
-        /// A top-level form moving between monitors is told about the new scale
-        /// through WM_DPICHANGED, not through OnDpiChangedAfterParent (that one
-        /// is for a child whose parent changed, so it never fired here and
-        /// dragging the widget between the 150% display and the 100% panel
-        /// resized nothing).
+        /// Opens the settings dialog and applies whatever comes back. The dialog
+        /// edits a copy, so cancelling writes nothing and changes nothing.
         ///
-        /// LOWORD(wParam) is the new DPI and is authoritative. The base call
-        /// runs first so WinForms has updated its own bookkeeping before the
-        /// layout is recomputed from the same value. The suggested rectangle in
-        /// lParam is deliberately not applied: the widget owns its own
-        /// position, and honouring it would fight the drag handler.
+        /// The engine takes the new values live and the tick period is
+        /// rescheduled to match, which is what makes the change visible without
+        /// a restart. Applying to the engine before saving means a rejected value
+        /// cannot leave the file and the running state disagreeing.
         /// </summary>
-        protected override void WndProc(ref Message m)
+        void OnSettingsClick()
         {
-            if (m.Msg == Native.WM_DPICHANGED)
+            _engine.NoteOwnInput();
+
+            using (SettingsDialog dlg = new SettingsDialog(_engine))
             {
-                uint dpi = (uint)(m.WParam.ToInt64() & 0xFFFF);
-                base.WndProc(ref m);
-                ApplyDpi(dpi, "WM_DPICHANGED");
-                return;
+                // Place it against the widget rather than letting Windows decide,
+                // because a default-placed dialog likes to land on the other
+                // monitor when the widget is on the second display. The widget
+                // sits near the top right by default, so centring on it puts the
+                // dialog half off the right edge, hence the clamp to whichever
+                // monitor the widget is on.
+                Rectangle wa = Screen.FromControl(this).WorkingArea;
+                dlg.StartPosition = FormStartPosition.Manual;
+                dlg.Location = new Point(
+                    Math.Max(wa.Left, Math.Min(wa.Right - dlg.Width,
+                        Left + (Width - dlg.Width) / 2)),
+                    Math.Max(wa.Top, Math.Min(wa.Bottom - dlg.Height,
+                        Top + (Height - dlg.Height) / 2)));
+                dlg.ShowDialog(this);
+
+                if (!dlg.Accepted) return;
+
+                InputOptions opts = new InputOptions();
+                opts.ResetOnKeyPress = dlg.ResetOnKeyPress;
+                opts.ResetOnClick = dlg.ResetOnClick;
+                opts.ResetOnScroll = dlg.ResetOnScroll;
+                opts.ResetOnMovement = dlg.ResetOnMovement;
+                opts.IgnoreInjected = dlg.IgnoreInjected;
+
+                try
+                {
+                    _engine.ApplySettings(dlg.IntervalSeconds, dlg.ResumeDelaySeconds,
+                                          dlg.MoveThresholdPixels, opts);
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    // Should be unreachable, because the dialog's spin controls
+                    // enforce the same ranges. Logged rather than swallowed, and
+                    // the file is left alone so the two cannot disagree.
+                    Log("settings rejected, not saved: " + ex.Message);
+                    return;
+                }
+
+                _tick.Interval = _engine.IntervalSeconds * 1000;
+
+                _cfg.IntervalSeconds = _engine.IntervalSeconds;
+                _cfg.ResumeDelaySeconds = _engine.HoldSeconds;
+                _cfg.MoveThresholdPixels = _engine.MoveThresholdPixels;
+                _cfg.ResetOnKeyPress = opts.ResetOnKeyPress;
+                _cfg.ResetOnClick = opts.ResetOnClick;
+                _cfg.ResetOnScroll = opts.ResetOnScroll;
+                _cfg.ResetOnMovement = opts.ResetOnMovement;
+                _cfg.IgnoreInjected = opts.IgnoreInjected;
+                _cfg.Save();
+
+                UpdateLabels();
             }
-            base.WndProc(ref m);
         }
 
-        /// <summary>
-        /// Re-read the DPI once the window is actually on screen. The first
-        /// layout happens before RestorePosition has moved the widget, so it
-        /// can be sized for a monitor the widget is not on. This is the check
-        /// that makes the initial position come out right in both directions.
-        /// </summary>
-        protected override void OnShown(EventArgs e)
-        {
-            base.OnShown(e);
-            ApplyDpi(Native.GetDpiForWindow(Handle), "shown");
-        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            using (Pen p = new Pen(Edge))
+            using (Pen p = new Pen(Palette.Edge))
                 e.Graphics.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
         }
     }
@@ -434,7 +487,6 @@ namespace TabCycler
     {
         internal const int WM_NCLBUTTONDOWN = 0x00A1;
         internal const int HTCAPTION = 0x0002;
-        internal const int WM_DPICHANGED = 0x02E0;
 
         [DllImport("user32.dll")]
         internal static extern uint GetDpiForWindow(IntPtr hwnd);
