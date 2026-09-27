@@ -5,8 +5,6 @@ interval, so you can watch several agents work without clicking through tabs.
 
 ![The TabCycler widget, showing that it is idle until Windows Terminal is focused](docs/widget.png)
 
-<!-- Status: private while it is being vetted. See the open issues. -->
-
 ## What it does
 
 - Switches to the next tab every 5 seconds while Windows Terminal is in front
