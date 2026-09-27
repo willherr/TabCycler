@@ -725,5 +725,201 @@ namespace TabCycler.Tests
             Assert.True(InputOptions.Default.ArmsFor(InputKind.Unclassified),
                 "unclassified arms when any of its three candidates is enabled");
         }
+
+        // ---- live settings, which is what the dialog in #9 depends on --------
+
+        [Test("edited timings take effect on the next tick without a restart")]
+        public void ApplySettingsChangesInterval()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            _e.ApplySettings(30, Hold, CyclerEngine.DefaultMoveThresholdPixels, InputOptions.Default);
+            Assert.Equal(30, _e.IntervalSeconds, "the new interval is readable");
+
+            // Still inside the old 5s wait, which must not now fire.
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Equal(1, _p.Injections, "the old short interval no longer applies");
+
+            _e.Tick(T0.AddSeconds(35));
+            Assert.Equal(2, _p.Injections, "and the new long one does");
+        }
+
+        [Test("a longer interval does not fire early just because the old deadline passed")]
+        public void ApplySettingsReschedulesRatherThanKeepingPhase()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            // Change the interval at t=5, when the t=10 deadline was already set.
+            _e.ApplySettings(60, Hold, CyclerEngine.DefaultMoveThresholdPixels, InputOptions.Default);
+
+            _e.Tick(T0.AddSeconds(20));
+            Assert.Equal(1, _p.Injections,
+                "preserving the old phase would have switched here, which is surprising");
+            _e.Tick(T0.AddSeconds(70));
+            Assert.Equal(2, _p.Injections, "and the new interval still fires");
+        }
+
+        [Test("a new resume delay applies from the moment of the change")]
+        public void ApplySettingsReschedulesTheHold()
+        {
+            Setup();
+            // Idle at the terminal on start, so the 60s hold is already running.
+            _e.Tick(T0.AddSeconds(1));
+            _e.ApplySettings(Interval, 5, CyclerEngine.DefaultMoveThresholdPixels, InputOptions.Default);
+
+            _e.Tick(T0.AddSeconds(7));
+            Assert.Same(WatchState.Cycling, _e.State,
+                "a 5s hold starting at t=1 is up at t=6, so cycling has begun");
+        }
+
+        [Test("turning an input kind off while running stops it arming")]
+        public void ApplyOptionsMidRun()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            _e.ApplySettings(Interval, Hold, CyclerEngine.DefaultMoveThresholdPixels,
+                             OptionsOff("key"));
+            _p.TypeKey();
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Same(WatchState.Cycling, _e.State,
+                "typing no longer arms, because the dialog turned it off");
+
+            _e.ApplySettings(Interval, Hold, CyclerEngine.DefaultMoveThresholdPixels,
+                             InputOptions.Default);
+            _p.TypeKey();
+            _e.Tick(T0.AddSeconds(7));
+            Assert.Same(WatchState.Holding, _e.State,
+                "turning it back on arms again without a restart");
+        }
+
+        [Test("the movement threshold can be changed while running")]
+        public void ApplySettingsChangesThreshold()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            // DriftPointer moves 2px, which is under the 8px default and over 1.
+            _p.DriftPointer();
+            _e.Tick(T0.AddSeconds(6));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: 2px is under 8");
+
+            _e.ApplySettings(Interval, Hold, 1, InputOptions.Default);
+            Assert.Equal(1, _e.MoveThresholdPixels, "the new threshold is readable");
+
+            _e.Toggle(T0.AddSeconds(7));
+            _e.Tick(T0.AddSeconds(12));
+            _p.DriftPointer();
+            _e.Tick(T0.AddSeconds(13));
+            Assert.Same(WatchState.Holding, _e.State, "a 2px nudge now counts");
+        }
+
+        [Test("a bad setting is rejected and changes nothing")]
+        public void ApplySettingsRejectsBadValues()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                delegate { _e.ApplySettings(0, Hold, 8, InputOptions.Default); },
+                "a zero interval is refused");
+            Assert.Throws<ArgumentOutOfRangeException>(
+                delegate { _e.ApplySettings(Interval, -1, 8, InputOptions.Default); },
+                "a negative hold is refused");
+            Assert.Throws<ArgumentOutOfRangeException>(
+                delegate { _e.ApplySettings(Interval, Hold, 0, InputOptions.Default); },
+                "a zero threshold is refused");
+
+            Assert.Equal(Interval, _e.IntervalSeconds, "the interval survived the rejection");
+            Assert.Equal(Hold, _e.HoldSeconds, "the hold survived the rejection");
+            Assert.Equal(CyclerEngine.DefaultMoveThresholdPixels, _e.MoveThresholdPixels,
+                "the threshold survived the rejection");
+            Assert.Same(WatchState.Cycling, _e.State, "and the engine kept running");
+        }
+
+        [Test("a rejected setting does not reschedule the pending wait")]
+        public void ApplySettingsRejectionIsAtomic()
+        {
+            Setup();
+            _e.Toggle(T0);
+            _e.Tick(T0.AddSeconds(5));
+            Assert.Same(WatchState.Cycling, _e.State, "precondition: cycling");
+
+            try
+            {
+                _e.ApplySettings(60, Hold, 0, InputOptions.Default);
+                Assert.True(false, "expected the call to throw");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+
+            _e.Tick(T0.AddSeconds(11));
+            Assert.Equal(2, _p.Injections,
+                "the deadline was left alone, so the original 5s interval still governs");
+        }
+
+        // ---- the hint line, which now describes whatever is actually enabled --
+
+        [Test("the hint names every kind that is switched on")]
+        public void DetailTextListsEnabledKinds()
+        {
+            SetupWith(InputOptions.Default);
+            _e.Tick(T0.AddSeconds(1));
+            Assert.Same(WatchState.Holding, _e.State, "precondition: holding");
+            Assert.Equal("reset by typing, clicks, scroll or movement", _e.DetailText,
+                "all four kinds are on by default");
+        }
+
+        [Test("the hint drops a kind once it is switched off")]
+        public void DetailTextFollowsSettings()
+        {
+            Setup();
+            _e.Tick(T0.AddSeconds(1));
+            _e.ApplySettings(Interval, Hold, CyclerEngine.DefaultMoveThresholdPixels,
+                             OptionsOff("movement", "click"));
+            Assert.Equal("reset by typing or scroll", _e.DetailText,
+                "the hint must not claim clicks or movement once they are off");
+        }
+
+        [Test("the hint admits when nothing can re-arm the hold")]
+        public void DetailTextWithNothingEnabled()
+        {
+            Setup();
+            _e.Tick(T0.AddSeconds(1));
+            _e.ApplySettings(Interval, Hold, CyclerEngine.DefaultMoveThresholdPixels,
+                             OptionsOff("key", "click", "scroll", "movement"));
+            Assert.Equal("reset by nothing, the wait always runs", _e.DetailText,
+                "an empty list would be a worse answer than saying so");
+        }
+
+        [Test("the input summary in the log is the same string the widget builds")]
+        public void DescribeInputIsShared()
+        {
+            InputOptions o = OptionsOff("scroll", "movement");
+            Assert.Equal("key,click,skipInjected", CyclerEngine.DescribeInput(o),
+                "one definition, so the log and the widget cannot disagree");
+
+            // Ignoring injected input is independent of which kinds arm the
+            // hold, so switching the four kinds off still leaves it reported.
+            InputOptions off = OptionsOff("key", "click", "scroll", "movement");
+            Assert.Equal("skipInjected", CyclerEngine.DescribeInput(off),
+                "a filter that is still on is still reported");
+
+            off.IgnoreInjected = false;
+            Assert.Equal("none", CyclerEngine.DescribeInput(off),
+                "only with nothing left at all is it 'none'");
+        }
     }
 }

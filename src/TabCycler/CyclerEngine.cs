@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace TabCycler
 {
@@ -18,10 +19,10 @@ namespace TabCycler
         public const int DefaultMoveThresholdPixels = 8;
 
         readonly IPlatform _p;
-        readonly int _interval;
-        readonly int _hold;
-        readonly int _moveThreshold;
-        readonly InputOptions _input;
+        int _interval;
+        int _hold;
+        int _moveThreshold;
+        InputOptions _input;
 
         WatchState _state = WatchState.Holding;
         DateTime _now;
@@ -66,6 +67,68 @@ namespace TabCycler
         /// <summary>Optional sink for state-transition messages.</summary>
         public Action<string> Log { get; set; }
 
+        /// <summary>
+        /// Applies edited settings without restarting, which is what lets the
+        /// settings dialog be live. Same validation as the constructor, and the
+        /// same exception on bad input, so an invalid value can never leave the
+        /// engine in a state the constructor would have rejected.
+        ///
+        /// Changing a timing reschedules the current wait from now, so the effect
+        /// is visible on the next tick rather than after whatever was already
+        /// pending. Rescheduling relative to now is also the only predictable
+        /// choice: preserving the old phase would make a 5 to 60 second change
+        /// fire sooner than the new interval promises.
+        /// </summary>
+        public void ApplySettings(int intervalSeconds, int holdSeconds, int moveThresholdPixels,
+                                  InputOptions inputOptions)
+        {
+            if (intervalSeconds < 1) throw new ArgumentOutOfRangeException("intervalSeconds");
+            if (holdSeconds < 0) throw new ArgumentOutOfRangeException("holdSeconds");
+            if (moveThresholdPixels < 1) throw new ArgumentOutOfRangeException("moveThresholdPixels");
+            inputOptions.Validate();
+
+            bool timingChanged = intervalSeconds != _interval || holdSeconds != _hold;
+            _interval = intervalSeconds;
+            _hold = holdSeconds;
+            _moveThreshold = moveThresholdPixels;
+            _input = inputOptions;
+
+            if (timingChanged)
+            {
+                if (_state == WatchState.Cycling)
+                    _nextCycleAt = _now.AddSeconds(_interval);
+                else
+                    _resumeAt = _now.AddSeconds(_hold);
+            }
+
+            // Logged on every apply, not only when a timing moved, so that an
+            // input-option change is traceable. "Why is it not cycling" is
+            // exactly the question that needs the answer in the log.
+            if (Log != null)
+            {
+                Log("settings applied: interval=" + _interval + "s resumeDelay=" + _hold +
+                    "s moveThreshold=" + _moveThreshold + "px input=[" + DescribeInput(_input) + "]" +
+                    (timingChanged ? " (timing rescheduled)" : ""));
+            }
+        }
+
+        /// <summary>
+        /// Compact list of the input kinds that re-arm the hold. Public because
+        /// the widget logs the same summary at startup, and two copies of this
+        /// string would drift.
+        /// </summary>
+        public static string DescribeInput(InputOptions o)
+        {
+            string s = "";
+            if (o.ResetOnKeyPress) s += "key,";
+            if (o.ResetOnClick) s += "click,";
+            if (o.ResetOnScroll) s += "scroll,";
+            if (o.ResetOnMovement) s += "move,";
+            if (o.IgnoreInjected) s += "skipInjected";
+            if (s.Length == 0) return "none";
+            return s.TrimEnd(',');
+        }
+
         // ---- what the widget shows -------------------------------------------
 
         /// <summary>
@@ -97,10 +160,28 @@ namespace TabCycler
                 switch (_state)
                 {
                     case WatchState.Away: return "focus Windows Terminal to start";
-                    case WatchState.Holding: return "reset by typing, clicks, scroll or movement";
+                    case WatchState.Holding: return "reset by " + ArmingPhrase();
                     default: return "next tab in " + SecondsLeft(_nextCycleAt) + "s";
                 }
             }
+        }
+
+        /// <summary>
+        /// Plain-English list of what currently re-arms the hold, so the hint
+        /// under the status cannot claim something that is switched off. With
+        /// everything off there is nothing to wait for, which is worth saying
+        /// plainly rather than showing an empty list.
+        /// </summary>
+        string ArmingPhrase()
+        {
+            List<string> parts = new List<string>();
+            if (_input.ResetOnKeyPress) parts.Add("typing");
+            if (_input.ResetOnClick) parts.Add("clicks");
+            if (_input.ResetOnScroll) parts.Add("scroll");
+            if (_input.ResetOnMovement) parts.Add("movement");
+            if (parts.Count == 0) return "nothing, the wait always runs";
+            if (parts.Count == 1) return parts[0];
+            return string.Join(", ", parts.ToArray(), 0, parts.Count - 1) + " or " + parts[parts.Count - 1];
         }
 
         int SecondsLeft(DateTime when)
