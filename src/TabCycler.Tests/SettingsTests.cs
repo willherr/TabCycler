@@ -195,5 +195,50 @@ namespace TabCycler.Tests
                 Directory.Delete(dir, true);
             }
         }
+        [Test("a value written to disk is read back on the next construction")]
+        public void DiskRoundTrip()
+        {
+            // This is the test that was missing, and its absence is why a bug in
+            // the disk path survived: every other test drives LoadFrom with a
+            // string, so the code that actually opens settings.txt on launch was
+            // never executed by the suite. It was wrapping the file's contents
+            // in a StreamReader, whose constructor wants a path, so it threw on
+            // every launch and the widget ran on defaults.
+            string dir = Path.Combine(Path.GetTempPath(),
+                "TabCyclerTests_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Settings first = new Settings(dir);
+                first.IntervalSeconds = 2;
+                first.ResumeDelaySeconds = 15;
+                first.ResetOnMovement = false;
+                first.AlwaysOnTop = true;
+                first.Left = 1234;
+                first.Top = 56;
+                first.Save();
+
+                Settings second = new Settings(dir);
+                Assert.Equal(2, second.IntervalSeconds, "the interval survives a real disk round trip");
+                Assert.Equal(15, second.ResumeDelaySeconds, "and so does the resume delay");
+                Assert.False(second.ResetOnMovement, "and a boolean");
+                Assert.True(second.AlwaysOnTop, "and another boolean");
+                Assert.Equal(1234, second.Left, "and the position");
+                Assert.Equal(56, second.Top, "and the other position axis");
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
+
+        [Test("a missing file yields defaults instead of throwing")]
+        public void MissingFileYieldsDefaults()
+        {
+            string dir = Path.Combine(Path.GetTempPath(),
+                "TabCyclerTests_" + Guid.NewGuid().ToString("N"));
+            Settings s = new Settings(dir);
+            Assert.Equal(5, s.IntervalSeconds, "no file means the compiled-in default");
+            Assert.Equal(60, s.ResumeDelaySeconds, "for every value");
+        }
     }
 }
