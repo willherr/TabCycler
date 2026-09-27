@@ -20,7 +20,12 @@ Because this is public now, two things are no longer private thinking:
 # Build the exe
 pwsh -NoProfile -File .\src\TabCycler\build.ps1
 
-# Run the tests (77 of them, no desktop needed)
+# Build, install to the stable per-user location, and restart the running copy.
+# Run this after every new version, so the copy that actually runs and any
+# taskbar pin pointing at it are the newest build.
+pwsh -NoProfile -File .\install.ps1
+
+# Run the tests (79 of them, no desktop needed)
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1
 pwsh -NoProfile -File .\src\TabCycler.Tests\run-tests.ps1 -Filter Pause
 ```
@@ -29,6 +34,29 @@ Both use the .NET Framework compiler that ships with Windows
 (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`). There is no .NET SDK
 on this machine and no package restore; do not introduce a dependency that needs
 one without checking that first.
+
+## Every release ends the same way
+
+Will's standing request: when a new version is cut, the copy that runs must be
+updated, and it is pinned to his taskbar. Concretely, after tagging and
+publishing:
+
+1. `pwsh -NoProfile -File .\install.ps1`, which builds, copies the exe to
+   `%LOCALAPPDATA%\Programs\TabCycler\TabCycler.exe`, stops the old process and
+   starts the new one. That path is the stable one, on purpose: a taskbar pin
+   stores the path it was pinned to, so a pin survives every future release
+   **only if the file at that path is replaced in place**, never moved.
+2. Do not reuse the old `C:\Users\wch\Tools\TabCycler` scratch folder as the
+   install location. It still holds the original single-file source and the
+   early dev scripts, and a stale exe living there is what made "which build am
+   I even running" a recurring question.
+3. Pinning itself is a one-time gesture by Will, right-click the taskbar button
+   then Pin to taskbar. **Windows exposes no supported API to pin a window
+   programmatically**, so an agent cannot do that part; the durable half, which
+   is the half that actually matters, is step 1 keeping the pinned path current.
+4. The widget shows its own taskbar button (`ShowInTaskbar = true`) and is
+   `WS_EX_NOACTIVATE`, so the button restores the window without stealing focus
+   from the terminal.
 
 ## A green build does not mean the P/Invoke works
 
