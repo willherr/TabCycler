@@ -76,13 +76,65 @@ on the second display.
   aware, so do not measure the widget's DPI from this shell. The widget reads
   its own and logs it
 
-## DPI scaling is applied from the handle, not the constructor
+## The two monitors have different scales, and that is the whole bug
 
-`ApplyDpi()` runs in `OnHandleCreated` and uses `GetDpiForWindow`. Do not move
-that back into the constructor and do not re-enable `AutoScaleMode.Dpi`:
-`CreateGraphics()` reports 96 on this machine regardless of the real display
-scale, so WinForms' own autoscaling silently declines to scale and the box ends
-up 96-DPI-sized while the fonts render large, which squashes the layout.
+Measured, not assumed:
+
+| Display | Position | Size | Primary | Scale |
+|---|---|---|---|---|
+| `\\.\DISPLAY1` external | -1, 1080 | 1280x720 | no | **150%** (144 DPI) |
+| `\\.\DISPLAY2` laptop panel | 0, 0 | 1920x1080 | yes | **100%** (96 DPI) |
+
+- Ask with **`GetScaleFactorForMonitor`** (Shcore.dll), which returns 100 / 125 /
+  150 / 175 / 200 directly. `GetDpiForMonitor` is useless here: it is not
+  DPI-aware itself and returns **96 for both monitors** to a per-monitor-aware
+  caller, which is not evidence about either display. A 96 in that API's output
+  is the API, not the machine.
+- Never infer a monitor's scale from `GetDpiForWindow` on the widget, or from
+  `AppliedDPI` under `HKCU\Control Panel\Desktop`. The external monitor at 150%
+  means the system DPI is 96, and the widget at 1440,0 is on the 100% panel, so
+  `dpi=96 box=320x82` is the **correct** answer there, not a fault. Chasing that
+  96 as a bug sent this in circles for a while.
+- The symptom is a **transition**, not a resting state: dragging from the
+  external 150% display to the laptop 100% panel left a 320x82 box holding
+  150%-scaled fonts, so the buttons jammed against the edge and the hint text
+  clipped.
+
+## DPI: WM_DPICHANGED is the only authoritative source
+
+Two independent scalings are in play and they must agree or the layout is wrong:
+
+1. The box and every position are multiplied out by `_scale`, because the
+   geometry is authored at 96 DPI.
+2. The fonts are created in **raw points**, so WinForms realises them against
+   the handle's own DPI when it paints.
+
+So (1) must be computed from the same DPI that (2) will use. `ApplyDpi` takes
+the DPI as a parameter for exactly this reason, and each caller says where its
+value came from in the log:
+
+- `WM_DPICHANGED` (`LOWORD(wParam)`) is authoritative and is the only thing that
+  fires on a move between monitors. It runs `base.WndProc` first so WinForms
+  updates its own bookkeeping, then re-lays out.
+- `OnShown` catches the initial case, because the first layout happens *before*
+  `RestorePosition` has moved the widget to its target monitor, so the DPI read
+  at that point can describe a monitor the widget is not on.
+- `GetDpiForWindow` is only the first guess at handle creation.
+
+Do not re-introduce `OnDpiChangedAfterParent` for this. That is the child-control
+hook (a child's parent changed DPI), so for a top-level `Form` it never fired and
+dragging between monitors resized nothing at all. That was the actual defect.
+
+Keep `AutoScaleMode = None` and do not move any of this into the constructor.
+`CreateGraphics()` reports 96 on this machine regardless of the real scale, so
+WinForms' own autoscaling silently declines to scale.
+
+Verify a change by moving the window with `SetWindowPos` across the monitor
+boundary and reading the `dpi=` lines. `SetWindowPos` does not touch the mouse
+and, because the window is `WS_EX_NOACTIVATE`, does not steal focus either. On a
+100% panel the shell's coordinate space matches the widget's, so a crop at that
+point is meaningful; on the 150% panel it is not, so check the log there.
+
 
 ## Architecture, and the rule that matters
 
@@ -101,6 +153,27 @@ that is a signal the logic is in the wrong place, not that the test is missing.
 The engine has exactly three states, and "stopped" deliberately has one
 spelling: pausing, going idle after a return, and reacting to input all land in
 `Holding`. Do not add a second way to be stopped.
+
+## Input detection, and the limit that cannot be engineered away
+
+`Win32Platform` installs `WH_KEYBOARD_LL` and `WH_MOUSE_LL` and reports typed
+events (key, click, scroll, movement) through `DrainInput()`. That replaced
+`GetLastInputInfo`, which could only say that something happened, never what.
+The old path is still there as the fallback when a hook cannot be installed.
+
+**Do not try to identify the process behind an input event.** The
+`LLKHF_INJECTED` / `LLMHF_INJECTED` bit is set by `SendInput` only.
+Automation that drives the real cursor through `SetCursorPos` or `mouse_event`
+produces events with the bit clear, which are indistinguishable from a human
+hand, and Windows exposes no way to attribute such an event to a process. Some
+background automation on this machine will always be counted as the user. This
+was measured, not guessed, and an hour went into the wrong lead because the
+observation that started it was `flags == 0` on every event.
+
+What is worth remembering: the widget's own `SendInput` for Ctrl+Tab is the one
+source of synthetic input here that *is* correctly ignored, and it used to reset
+its own hold. `IgnoreInjected` in `settings.txt` turns the filtering off, and
+each input kind can be armed or disarmed individually.
 
 ## Settings and logs
 
